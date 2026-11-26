@@ -81,12 +81,15 @@
 #modal-config-storage .modal-body { padding: 14px 24px 18px; }
 
 /* The entry key in the host drawer: the one control whose subject is the store
-   itself. Warning while nothing is encrypted, accent once a key protects it, and
-   warning again while the key is out — the three states the panel distinguishes,
+   itself. Warning while nothing is encrypted, accent once a key protects it,
+   warning again while the key is out, red when ciphertext has outlived its key,
+   and neutral before the first status read — the states the panel distinguishes,
    said on the button before the panel is even open. */
 #config-storage-open:not(.is-configured) { color: var(--warning); }
 #config-storage-open.is-configured { color: var(--accent); }
 #config-storage-open.is-locked { color: var(--warning); }
+#config-storage-open.is-orphaned { color: var(--danger); }
+#config-storage-open.is-unknown { color: var(--text-muted); }
 
 /* The banner is a door when it invites a click (a host that cannot be loaded
    until its key is in), not a notice. */
@@ -142,7 +145,6 @@
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cs-key-name-text.is-unnamed { font-weight: 400; opacity: .6; font-style: italic; }
-.cs-key-actions { margin-left: auto; }
 .cs-key-badge {
   flex: 0 0 auto; white-space: nowrap;
   /* The badge belongs to the NAME, not to the buttons: it hugs the name and its
@@ -277,11 +279,6 @@
   margin-top: 18px; padding-top: 14px;
   border-top: 1px solid var(--border-subtle);
 }
-
-/* A standalone note in the sheet. It sets its own margin because base.css gives
-   `.conn-field-hint` a negative top margin meant for hints that sit under an
-   input — used here it would overlap the block above. */
-#key-form-words-hint { margin: 8px 0 0; line-height: 1.5; }
 
 /* The facts strip: what this key is, in two or three short lines, under the name
    and above everything you can do to it. */

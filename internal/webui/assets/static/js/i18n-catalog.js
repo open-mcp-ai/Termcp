@@ -493,7 +493,7 @@ var I18N_CATALOG = {
     'storage.titleActivated': '{count} activated',
     'storage.titleLoaded': '{count} loaded',
     'storage.titleSelected': '{count}/{total} selected',
-    
+
     'storage.badgeUnknown': 'Keychain status unknown — open to check',
     'storage.badgeOff': 'No encryption key yet — click to add one',
     'storage.badgeOn': 'Encryption is on — click to manage the keys',
@@ -1162,7 +1162,7 @@ var I18N_CATALOG = {
     'storage.titleActivated': '激活 {count}',
     'storage.titleLoaded': '载入 {count}',
     'storage.titleSelected': '选中 {count}/{total}',
-    
+
     'storage.badgeUnknown': '钥匙链状态未知，打开查看',
     'storage.badgeOff': '还没有钥匙，点击添加',
     'storage.badgeOn': '加密已开启，点击管理钥匙',
@@ -1831,7 +1831,7 @@ var I18N_CATALOG = {
     'storage.titleActivated': '啟用 {count}',
     'storage.titleLoaded': '載入 {count}',
     'storage.titleSelected': '選取 {count}/{total}',
-    
+
     'storage.badgeUnknown': '鑰匙鏈狀態未知，開啟查看',
     'storage.badgeOff': '還沒有鑰匙，點擊新增',
     'storage.badgeOn': '加密已開啟，點擊管理鑰匙',

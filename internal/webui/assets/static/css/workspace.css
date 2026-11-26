@@ -1643,7 +1643,10 @@
    glyphs swap by state (`aria-pressed`), which is why only one is ever laid out. */
 .drawer-add-row .drawer-mask { flex: 0 0 40px; margin: 0; }
 /* One glyph at a time. `aria-pressed` is the single source of the state, so the
-   rule below is the only place the swap is decided. */
+   rule below is the only place the swap is decided. The glyph names the ACTION,
+   like the label beside it ("Show addresses" while masked): an open eye offers to
+   reveal, the struck eye offers to hide. That is why pressed — visible — shows the
+   struck eye. */
 .drawer-mask .eye-open { display: block; }
 .drawer-mask .eye-closed { display: none; }
 .drawer-mask[aria-pressed="true"] .eye-open { display: none; }

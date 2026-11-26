@@ -365,16 +365,12 @@ function applyConfigStorageSnapshot(state) {
   if (modal && !modal.classList.contains('hidden')) renderConfigStorage();
 }
 
-/* A key is known by its name. The short id stays beside it because it is the one
-   thing that cannot be mistyped for another key, but it is never the headline —
-   "f69cba19" tells nobody which machine this is. */
+/* A key is known by the name its person gave it. No name is not a short id:
+   "f69cba19" tells nobody which machine this is, so the list says the key is
+   unnamed, and an id appears only where a key must be pointed at by id. */
 function configStorageKeyLabel(key) {
   if (key && key.label) return key.label;
   return t('storage.keyUnnamed');
-}
-
-function configStorageKeyShortID(key) {
-  return String((key && key.id) || '').slice(0, 8);
 }
 
 /* What this key is and what it would cost to lose: one line, in the order a person
@@ -441,7 +437,7 @@ function renderMainKeys() {
  */
 function configStorageKeyRow(key) {
   var row = document.createElement('li');
-  row.className = 'cs-key-row' + (key.plugged ? ' is-loaded' : '');
+  row.className = 'cs-key-row';
   row.setAttribute('data-key-id', key.id);
   row.tabIndex = 0;
   if (_keySelected[key.id]) row.classList.add('is-selected');
@@ -582,15 +578,6 @@ function openKeyCreate() {
   try { document.getElementById('key-form-name').focus(); } catch (e) {}
 }
 
-function closeKeyCreate() {
-  hideModal('modal-key-form');
-  _keyFormMode = 'new';
-  _keyFormID = '';
-  _keyFormWords = '';
-  _keyFormRevealed = false;
-  keyFormError('');
-}
-
 function keyCreateError(msg) { keyFormError(msg); }
 
 function keyCreateGenerateWords() {
@@ -728,7 +715,6 @@ function syncConfigStorageSelection() {
   if (exp) {
     exp.title = count ? t('storage.keyExportSelected', {count: String(count)}) : t('storage.keyExportAction');
     exp.disabled = count === 0;
-    exp.classList.toggle('is-active', count > 0);
   }
 }
 
@@ -1780,9 +1766,16 @@ function configStorageRotateKey() {
 /* ---- The masking eye -------------------------------------------------------
    One toggle, in the host column's own bar. `aria-pressed` IS the state: it drives
    the glyph swap in CSS and is what a screen reader announces, so there is no
-   second copy of the truth to drift. The eye shows what the list looks like right
-   now — closed eye means addresses are hidden — because that is the question a
-   person has when glancing at it. */
+   second copy of the truth to drift. Pressed means SHOWING — the state is a
+   button's, not a picture's.
+
+   The GLYPH, unlike `aria-pressed`, names the action: an open eye while addresses
+   are masked (click to reveal), the struck eye while they are visible (click to
+   hide). It reads that way beside its own label, which flips the same way. This
+   paragraph used to say the eye showed the current state — "closed eye means
+   addresses are hidden" — which is the opposite of what the two rules in
+   workspace.css draw, and is exactly the kind of comment that makes the next
+   reader "fix" correct code. */
 function maskToggleButton() {
   return document.getElementById('conn-mask-toggle');
 }
@@ -1818,7 +1811,8 @@ function paintMaskToggle() {
   var masked = connMasked();
   /* aria-pressed describes the button, and this button is "show the address and
      the user name". Pressed therefore means SHOWING, which is the inverse of
-     `masked` — the eye is open exactly when the information is on screen. Getting
+     `masked`. The glyph names the action, like the label does: an open eye while
+     masked offers to reveal, the struck eye while visible offers to hide. Getting
      this backwards is how an icon starts lying while every value under it is
      still correct. */
   btn.setAttribute('aria-pressed', masked ? 'false' : 'true');
