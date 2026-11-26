@@ -60,7 +60,7 @@ The protocol uses a strict subset of HTTP status codes, mapped to execution outc
 | `206` | `Partial Content` | Successful slice of a larger stream. Accompanied by a `Content-Range` header. |
 | `208` | `Already Reported` | Statement was skipped due to short-circuit logic (e.g. right side of `&&` after a failure). The slot is preserved so position maps 1:1 to the input AST. |
 | `400` | `Bad Request` | Syntax error, unrecognized directive, missing required flag, or invalid flag combination. Refused before execution begins. |
-| `403` | `Forbidden` | Operation blocked by session whitelist (`allow` / `paths`) or review policy. |
+| `403` | `Forbidden` | Operation blocked by an extension's capability (`allow` / `paths`) or review policy; the body names the blocking extension and how to change it (`get ext` / `edit ext` / Web UI). |
 | `404` | `Not Found` | Target session, channel, file, extension, or host does not exist. |
 | `409` | `Conflict` | Resource conflict (e.g. creating an extension or host with a name already taken). |
 | `413` | `Payload Too Large` | Single frame exceeds the transport window limit. |
@@ -78,8 +78,8 @@ Headers provide decision-making metadata for the caller's next step:
 ### Addressing & Ranges
 - `Content-Range: bytes <start>-<end>/<total>` — byte offsets within the stream. The continuation point `<end>+1` is what the next `--cursor` or `--offset` flag accepts.
 - `Input-At: <byte-offset>` — the stream offset where this specific command was typed. Re-reading from this address reproduces the command's complete output.
-- `Path: <canonical-path>` — the canonical directive invocation that produced this slot.
-- `Channel: <id>` / `Session: <id>` — identity of the channel or session that executed the work.
+- `Path: <canonical-path>` — the canonical directive invocation that produced this slot (any value expanded from `secrets` is masked back to `$NAME` so credentials do not travel into the transcript).
+- `Channel: <id>` / `Session: <id>` — identity of the channel or session that executed the work. A `<session>` target in a directive accepts the full 12-character id, the session's `--name`, or any unique prefix of at least 4 characters (ambiguous matches are rejected and list their candidates).
 
 ### Explanations & Next Steps
 - `Hint: <single-line-text>` — actionable diagnostic on `204` or `4xx` replies (e.g. "no frames arrived within the timeout", "quoted string missing closing quote"). Replaces bodies on `204`.
@@ -91,6 +91,8 @@ Headers provide decision-making metadata for the caller's next step:
 - `Scan-Window: searched bytes A-B of T` — grep or search stopped early due to byte-budget bounds.
 - `Omitted: <count> bytes` — middle section withheld by folding rules.
 - `Still-Running: true` — process is still active; re-read will produce more bytes.
+- `Completion: matched|exit|quiet` — present only when the wait ended on concrete evidence: `--until` matched (`matched`), the process or remote shell's OSC 133 marker (`\x1b]133;D;<code>`) reported an exit (`exit`, paired with `Exit-Code`), or a PTY stream stood still for the quiet interval (`quiet`). Absence of `Completion` means the state is unknown, never an assumption.
+- `Exit-Code: <n>` — exit status reported by a pipe process or by the remote shell's OSC 133 completion report.
 
 ---
 

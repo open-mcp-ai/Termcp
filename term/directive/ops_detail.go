@@ -1039,6 +1039,12 @@ two sessions, always.
 
   connect prod                    a session, ready for open
   connect prod --argv htop        ...with a first channel already running it
+  connect prod --name web         ...giving the session a name you can address it by
+
+A SESSION IS ADDRESSED BY ID, NAME, OR PREFIX: its full 12-character id, the --name
+it was connected with (run web:1), or any unique prefix of at least four characters
+(get 70ab, ls 70ab). Ambiguous names and prefixes are refused with the matching ids
+rather than guessed, because guessing puts the next close on someone else's session.
 
 The host must already be configured: ls host lists them, create host adds one.`
 
@@ -1193,6 +1199,18 @@ when you mean to patch bytes in place.
 Every write reports the SHA256 of the bytes that actually landed, and text mode
 reports what it decoded (\n -> LF, \\ -> \) so a rewritten payload is visible in
 the reply rather than only downstream when a build or compile fails.
+
+--old-text/--new-text EDIT ONE PLACE INSTEAD OF REPLACING THE FILE. The old text must
+appear EXACTLY ONCE: zero matches and several matches are both refused, and the
+ambiguous one names the count so you can add surrounding context rather than guess.
+It reads, writes a temporary file beside the original and renames over it, so a
+reader sees the old file or the new one and never a half-written one, and the mode is
+preserved. Use it instead of --data when the file is too big to rewrite by hand, since
+--data replaces the WHOLE file and loses anything that changed since you read it.
+THE REPLY SHOWS THE EDIT: besides bytes_written it carries the 1-based line that
+changed and a one-line diff (L2: - old | + new), so checking the result does not cost
+another read of the file. Files over 16 MiB are refused: exact replace is an edit,
+not a copy.
 
 PATHS ARE POSIX ON THE WIRE, ON EVERY PLATFORM. SFTP is a POSIX-shaped protocol, so
 a Windows absolute path has a second spelling: C:/tc/x is /C:/tc/x on the wire, and
