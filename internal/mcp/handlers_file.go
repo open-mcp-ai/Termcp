@@ -245,14 +245,23 @@ func (s *Server) handleFileReplace(ctx context.Context, request mcp.CallToolRequ
 	defer sftpCli.Close()
 	defer releaseTransport()
 
-	n, err := sftpCli.ReplaceInFile(remotePath, oldText, newText)
+	rep, err := sftpCli.ReplaceInFileReport(remotePath, oldText, newText)
 	if err != nil {
 		return fileErr(err, remotePath), nil
 	}
-	// bytes_written is the whole point of reporting here: the caller can confirm the
-	// edit landed without a second stat, and a replace that reports nothing leaves
-	// "did it work?" to be answered by re-reading the file.
-	return jsonResult(map[string]any{"ok": true, "bytes_written": n, "remote_path": remotePath}), nil
+	// WHAT CHANGED, NOT ONLY HOW MANY BYTES (issue #357 §1.2). `bytes_written` confirms a
+	// file was rewritten; `line` / `old` / `new` confirms which line landed without
+	// re-reading the whole file to look.
+	out := map[string]any{
+		"ok":            true,
+		"bytes_written": rep.Bytes,
+		"remote_path":   remotePath,
+		"line":          rep.Line,
+	}
+	if rep.Old != "" || rep.New != "" {
+		out["diff"] = fmt.Sprintf("L%d: - %s | + %s", rep.Line, rep.Old, rep.New)
+	}
+	return jsonResult(out), nil
 }
 
 // remotePathRequired is the one refusal for a file request with no path: it names
