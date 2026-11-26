@@ -97,6 +97,13 @@ func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement,
 	// THE TERM IS BUILT HERE, per call, because both of its parts are per call: the
 	// handler closes over this call's window, and LearnMode comes from the same
 	// place. Construction is a struct literal, not an allocation worth avoiding.
+	// THE TOOL-LEVEL CHARSET BECOMES EVERY STATEMENT'S DEFAULT (issue #304). Injection is
+	// the right shape here rather than a field threaded into twenty handlers: `--encoding`
+	// already exists and already means exactly this, so the argument only has to arrive
+	// where the flag would have. A statement that names its own keeps it.
+	if win.Encoding != "" {
+		stmts = withDefaultEncoding(stmts, win.Encoding)
+	}
 	t := term.New(
 		directive.DefaultGrammar,
 		term.WithHandler(&capabilityHandler{s: s, win: win}),
@@ -159,4 +166,21 @@ func (h *capabilityHandler) Handle(ctx context.Context, st directive.Statement) 
 		slots = append(slots, h.s.runDirective(ctx, single, h.win)...)
 	}
 	return slots
+}
+
+// withDefaultEncoding stamps the call's charset onto every statement that did not name one.
+func withDefaultEncoding(stmts []directive.Statement, enc string) []directive.Statement {
+	out := make([]directive.Statement, len(stmts))
+	copy(out, stmts)
+	for i := range out {
+		if _, named := out[i].Flag("encoding"); named {
+			continue
+		}
+		if out[i].Flags == nil {
+			out[i].Flags = map[string]*string{}
+		}
+		value := enc
+		out[i].Flags["encoding"] = &value
+	}
+	return out
 }

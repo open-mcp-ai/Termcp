@@ -62,7 +62,11 @@ func TestAnUnknownArgumentIsRefusedByName(t *testing.T) {
 	// The complement: every published argument is still accepted. Without this the
 	// refusal above could be "reject everything" and the test would pass.
 	for _, d := range termArgDecls {
-		if _, err := parseTermArgs(map[string]any{d.Name: sampleValueFor(d.Kind)}); err != nil {
+		sample := any(d.Sample)
+		if d.Sample == "" {
+			sample = sampleValueFor(d.Kind)
+		}
+		if _, err := parseTermArgs(map[string]any{d.Name: sample}); err != nil {
 			t.Errorf("declared argument %q is refused by the reader: %s", d.Name, err.Msg)
 		}
 	}

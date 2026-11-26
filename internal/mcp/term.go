@@ -108,8 +108,12 @@ type termArgs struct {
 	// window to bound: how many bytes move is the caller's explicit `--bytes` /
 	// `--offset`. It used to truncate the copy to `bytes_limit` when one was named,
 	// which produced a corrupt destination that still reported 100% done.
-	BytesLimitSet   bool
-	BytesLimit      int
+	BytesLimitSet bool
+	BytesLimit    int
+	// Encoding is the charset the terminal writes in, as a DEFAULT for every read in this
+	// call (issue #304). A statement's own `--encoding` still wins: the caller who wrote it
+	// into a line meant that line.
+	Encoding        string
 	LinesLimit      int
 	TotalBytesLimit int
 	OnBytesOverflow string

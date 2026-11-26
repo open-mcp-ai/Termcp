@@ -2489,6 +2489,7 @@ Response 200:
 
 <!-- BEGIN termdoc: args -->
 | `cmd` | Empty or omitted returns the guide (where am I, what can I do, what is here) — never an error. A `cmd` that is present but not a string is a 400: a command that was sent and did not survive the transport is not the same request as one never sent |
+| `encoding` | The default charset for reads in this call, as `read --encoding` sets per statement. A byte that is not UTF-8 refuses the whole reply otherwise, which is the one thing a caller cannot work around from outside |
 | `timeout` | Seconds to look (default 2; a pipe returns as soon as its process exits). 60 is the wait to stay under, not a wall: a longer window is allowed, and the reply says how long it waited. An upper bound on waiting, not a completion wait |
 | `bytes_limit` | Bytes per slot (default 8192; `0` = the channel only, no bytes, otherwise at least 4 — a window narrower than one character cannot return one). 32768 is the size to stay under, not a wall: you are paying for the context, so a larger window is allowed and said so in the reply.
 Two paths read `0` as "name the object, consume nothing" and answer 204 with `Content-Range: bytes */N` so the page can be priced before it is bought: a channel read, and a generated reply (a listing, `help`, `cdp protocol`).

@@ -3,6 +3,7 @@ package mcp
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/open-mcp-ai/termcp/internal/encoding"
 	"math"
 	"sort"
 	"strconv"
@@ -89,6 +90,12 @@ type termArgDecl struct {
 	// one rule.
 	Min any
 
+	// Sample is a LEGAL value for this argument, for the tests that check every
+	// published name still parses. An argString's sample cannot be one string for all of
+	// them — "ls" is a legal value for `cmd` and not a charset for `encoding` — so the
+	// legal value is declared beside the declaration instead of guessed in the test.
+	Sample string
+
 	// BoundNote is what a caller is told when it lands outside Min/Max, after the
 	// range itself.
 	//
@@ -114,9 +121,23 @@ var termArgDecls = []termArgDecl{
 		DefText: "",
 	},
 	{
+		// THE CHARSET A TERMINAL WRITES IN (issue #304). A terminal is not a UTF-8 device:
+		// a zh-CN Windows console writes GBK, and one byte outside UTF-8 made the whole
+		// reply a 400 that named nothing the caller could act on. `read --encoding` could
+		// already say so per statement; an agent calling the tool has no statement, so the
+		// default belongs here.
+		Name:    "encoding",
+		Kind:    argString,
+		Desc:    "Terminal's charset for reads (e.g. gbk). Empty = UTF-8.",
+		DocNote: "The default charset for reads in this call, as `read --encoding` sets per statement. A byte that is not UTF-8 refuses the whole reply otherwise, which is the one thing a caller cannot work around from outside",
+		Def:     "",
+		DefText: "",
+		Sample:  "gbk",
+	},
+	{
 		Name:    "timeout",
 		Kind:    argNumber,
-		Desc:    fmt.Sprintf("Seconds to wait for output (0 = don't wait); an upper bound, not a completion wait. Default %d; %d is the wait to stay under.", defaultTimeoutSeconds, maxWaitSeconds),
+		Desc:    fmt.Sprintf("Seconds to wait for output (0 = don't wait); a bound, not a completion wait. Default %d.", defaultTimeoutSeconds),
 		DocNote: fmt.Sprintf("Seconds to look (default %d; a pipe returns as soon as its process exits). %d is the wait to stay under, not a wall: a longer window is allowed, and the reply says how long it waited. An upper bound on waiting, not a completion wait", defaultTimeoutSeconds, maxWaitSeconds),
 		Def:     defaultTimeoutSeconds,
 		DefText: strconv.Itoa(defaultTimeoutSeconds),
@@ -259,7 +280,7 @@ var termArgDecls = []termArgDecl{
 	{
 		Name:    "args",
 		Kind:    argStringArray,
-		Desc:    "Named = positional. The value IS the shell line: put the whole command in the variable and leave only the reference in cmd, which is parsed as DSL.",
+		Desc:    "Positional values for $1… The value IS the shell line; cmd holds only the reference.",
 		DocNote: "Positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets`",
 		Def:     nil,
 		DefText: "",
@@ -370,6 +391,15 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 	collect(readNumberArg(args, "lines_limit", &linesLimit))
 	collect(readNumberArg(args, "total_bytes_limit", &totalLimit))
 	collect(readEnumArg(args, "on_bytes_overflow", &w.OnBytesOverflow))
+	if enc := getString(args, "encoding", ""); enc != "" {
+		// A CHARSET WE CANNOT DECODE IS REFUSED HERE, not three layers down: a name nothing
+		// recognises would otherwise reach the read and come back as a decode failure that
+		// says nothing about the argument that caused it.
+		if _, err := encoding.Decode(enc, nil); err != nil {
+			collect(&directive.Error{Msg: fmt.Sprintf("encoding %q is not a charset this build knows: %v", enc, err)})
+		}
+		w.Encoding = enc
+	}
 	collect(readEnumArg(args, "on_lines_overflow", &w.OnLinesOverflow))
 	collect(readBoolArg(args, "learn_mode", &w.LearnMode))
 	if len(problems) > 0 {
