@@ -176,6 +176,13 @@
 - **标题栏就是控制行**：反选勾选框与四个钥匙操作都在标题右边。它们原来待的那一行会按钥匙数量收起，于是空钥匙链——新装第一次打开就是这个状态——没有任何可点的东西。现在面板只有标题栏、列表，以及列表足够长时才出现的筛选框。**勾选的颜色也回到主题画布色**：对话框里给文本框写的规则曾把勾画成正文颜色，于是浅色主题是深色勾、深色主题是浅色勾；四个主题实测勾色现在等于各自的 `--bg-canvas`。
 ### Added
 
+- Drive-prefixed Windows paths written with backslashes (`C:\tc\a.txt`,
+  `/C:\tc\a.txt`) are rewritten to the POSIX wire form (`/C:/tc/a.txt`) before
+  whitelist checks and file operations across `term`, file tools, `read … | write …`
+  pipelines and Web UI remote routes, with `path_adapted` / `Path-Adapted` recording the
+  adaptation. Unprefixed relative paths and `./C:\x` stay untouched so POSIX filenames
+  containing backslashes remain reachable; `help read` / `help write` include `/C:/...`
+  examples.
 - An extension channel declared with a stdio MCP server now works as a peer in `call`
   and `get`: `get <channel> tools [<name>]` prints the live tool table or one schema,
   and `call <channel> <tool> [<json-args>]` performs the `initialize` /

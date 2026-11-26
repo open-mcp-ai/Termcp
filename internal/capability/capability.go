@@ -60,6 +60,12 @@ type Capability struct {
 	// Kind is what review mode records on a queued request. The zero value
 	// means the operation is not reviewable at all.
 	Kind approval.Kind
+	// LocalPathArgs names the ones among PathArgs that name a path on the CALLER'S
+	// machine rather than on the session's. The distinction is not cosmetic: a
+	// download's destination and an upload's source are opened by this process, so
+	// rewriting their spelling to the SFTP wire form would make `os.Open` miss a
+	// Windows path that was correct as typed.
+	LocalPathArgs []string
 	// PathArgs names the arguments that carry a filesystem path, so a session's
 	// paths whitelist can scope them. Each capability declares its own rather
 	// than sharing one global list: a read-only skill's paths matter for
@@ -127,8 +133,8 @@ var table = []Capability{
 	{ID: "forward.list", Gate: GateOperator, Idempotent: true},
 
 	// --- Files ---
-	{ID: "file.read", PathArgs: []string{"remote_path", "local_path"}, Gate: GateOperator, Idempotent: true},
-	{ID: "file.write", PathArgs: []string{"remote_path", "local_path"}, Kind: approval.KindFileWrite, Gate: GateReview},
+	{ID: "file.read", PathArgs: []string{"remote_path", "local_path"}, LocalPathArgs: []string{"local_path"}, Gate: GateOperator, Idempotent: true},
+	{ID: "file.write", PathArgs: []string{"remote_path", "local_path"}, LocalPathArgs: []string{"local_path"}, Kind: approval.KindFileWrite, Gate: GateReview},
 	{ID: "file.stat", PathArgs: []string{"remote_path"}, Gate: GateOperator, Idempotent: true},
 	{ID: "file.delete", PathArgs: []string{"remote_path"}, Kind: approval.KindFileDelete, Gate: GateReview},
 	{ID: "file.rename", PathArgs: []string{"from_path", "to_path"}, Kind: approval.KindFileRename, Gate: GateReview},
