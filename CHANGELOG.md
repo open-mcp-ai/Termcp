@@ -228,15 +228,37 @@
   it termcp's directive language, and it is not `resources/subscribe`: the subscriber
   consumes the peer's own methods, so all this had to do was not swallow them. The
   reader also renews the extension's idle clock, so a subscriber keeps a lazily-started
-<<<<<<< HEAD
   peer alive between events.
-=======
   peer alive between events. The version the endpoint reports is the peer's own
   (`Mcp-Protocol-Version` from its `initialize` answer), not this build's constant, and
   the answer window is five minutes: it is the backstop for a peer that never answers,
   not a tool timeout, so a `tools/call` that takes a minute still returns its result.
+- A session can be named by its full id, by the `--name` it was connected with, or by
+  any prefix of the id that only one session matches: `run web:1`, `ls web`, `get
+  70ab`. A prefix shorter than four characters, or one that matches two sessions, is
+  refused with the candidates named rather than resolving to whichever is closer.
+  `ls` prints the shortest form that works, so the address in the reply is the one to
+  paste back.
+- The `term` tool takes `encoding`, the charset this call's reads assume (the same
+  flag `read --encoding` sets per statement). Without it a terminal that speaks GBK or
+  UTF-16 refuses the whole reply, because a byte that is not UTF-8 cannot be laid out
+  as text — the one thing a caller could not work around from outside.
+- Every verb's refusal now ends with one copyable example (`run h:1 $1`, `rm a1f3
+  --dry-run`, …). A caller that misspelled a flag used to be told "unknown flag" and
+  left to reconstruct the right line from a table; the example is the line, spelled
+  for the verb that refused.
+- A shell that reports its own completion is now heard on a plain `run`: when the
+  remote shell emits OSC 133 (`\x1b]133;D;<status>`) — Starship, oh-my-posh, fish
+  4.x, VS Code — the reply carries `Completion: exit` and `Exit-Code` without the
+  caller asking with `--until exit`. The marker is read from the window's raw bytes
+  only when the command actually printed something, so a still-running command is
+  not credited with a neighbour's status; with no marker the reply says nothing, the
+  same as before.
+- `write <session> file --old-text … --new-text …` reports which line it changed:
+  besides `bytes_written` the reply carries `line` and a one-line `diff` (`L2: -
+  timeout = 5 | + timeout = 30`). Checking an edit no longer means reading the file
+  back — the exact-replace primitive exists to avoid paying for the whole file.
 
->>>>>>> 6e32c11d (feat(mcp): 版本说对端的，窗口不是工具超时 (#328 S3 收尾))
 ### Fixed
 
 - `/ext/{name}/stream` is served by the same streamable-HTTP transport as the
@@ -317,6 +339,21 @@
   construct it does not implement.
 - `term` accepts `command` as an alias for `cmd`; both present and different is a
   400 naming both rather than a silent choice.
+- `--until exit` could never see the completion report it waits for: the scan asked
+  the output path for `raw`, a spelling the shared contract does not have, so it was
+  accepted and ignored and the reply came back with the ANSI bytes stripped — the
+  marker is an ANSI sequence. It now asks for `strip_ansi: false`, and a shell with
+  integration enabled answers with `Completion: exit` and its status.
+- A `403` names who can lift it and where: the capability that refused, the extension
+  holding it, and the three edits that would allow the call (`get ext`, `edit ext`, or
+  the Web UI). The old message named the restriction without saying it belonged to an
+  extension, which sends a reader looking for a setting in the session.
+- A `secrets` value is no longer echoed in the reply: `Path:` (and any refusal that
+  quotes the statement) prints the reference `$NAME` instead of the value it expanded
+  to. The command still runs with the real bytes and a written file still holds them —
+  what changed is the record, which is where the credential used to end up.
+  `vars` is echoed verbatim as before: it is part of the call's record.
+
 ### 修复
 
 - **本地端口转发（-L）的监听地址不再被静默忽略**：Web UI 弹窗此前对所有方向都统一提交 `local_host`，而服务端 `-L` 实际只消费 `bind_host`，导致用户在界面填入任意非回环监听地址后，服务端均静默回落到 `127.0.0.1`；现弹窗根据方向自适应提交 `bind_host`（本地）与 `local_host`（远端），输入框标签按方向明确标示「本机」或「目标机」。
