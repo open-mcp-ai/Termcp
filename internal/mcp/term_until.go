@@ -247,7 +247,13 @@ func (s *Server) peekRaw(ctx context.Context, handle string, from, to int64) (st
 		return "", true
 	}
 	args := argsOf("shell_id", handle, "offset", float64(from), "max_bytes", float64(to-from), "timeout", float64(0))
-	args["raw"] = true
+	// THE READER STRIPS ANSI BY DEFAULT, and `"raw": true` was not the switch it looked
+	// like: the shared read contract has no such field, so the flag was ignored and the
+	// window came back stripped. The shell's completion report IS an ANSI sequence
+	// (OSC 133), so `--until exit` could never match — it reported "did not match within
+	// the window" on every shell that sends the marker (issue #313). The switch is
+	// `strip_ansi`.
+	args["strip_ansi"] = false
 	res, fail := s.callTool(ctx, "shell_output", args)
 	if fail != nil {
 		return "", false
