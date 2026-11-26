@@ -70,6 +70,14 @@ func (s *Server) mcpToolCall(ctx context.Context, stmt directive.Statement, h *j
 // the parser intact, and it is the same "first word, then the rest" rule `create`
 // and `edit` already use for their trailing value.
 func splitToolCall(stmt directive.Statement, payload string) (string, map[string]any, *envelope.Slot) {
+	return splitToolCallAt(stmt, payload, "call <session> mcp:<n> <tool> [<json-args>]")
+}
+
+// splitToolCallAt is splitToolCall with the address spelling named by the caller, so a
+// refusal teaches the line the caller actually has: an extension's stdio channel is
+// called as `call <channel> <tool> {…}`, and answering that caller with the HTTP form's
+// `mcp:<n>` address would send them looking for a peer that does not exist (issue #316).
+func splitToolCallAt(stmt directive.Statement, payload, shape string) (string, map[string]any, *envelope.Slot) {
 	payload = strings.TrimSpace(payload)
 	name, rest := payload, ""
 	if i := strings.IndexAny(payload, " \t\n"); i >= 0 {
@@ -77,14 +85,14 @@ func splitToolCall(stmt directive.Statement, payload string) (string, map[string
 	}
 	name = unquoteWord(name)
 	if name == "" {
-		return "", nil, ptrSlot(badRequest(stmt, "needs a tool name: call <session> mcp:<n> <tool> [<json-args>]"))
+		return "", nil, ptrSlot(badRequest(stmt, "needs a tool name: "+shape))
 	}
 	args := map[string]any{}
 	if rest != "" {
 		if err := json.Unmarshal([]byte(unquoteWord(rest)), &args); err != nil {
 			return "", nil, ptrSlot(badRequest(stmt, "the arguments are not a JSON object: "+err.Error()+
 				"\nA tool's arguments are one object, bare or in single quotes:\n"+
-				"  call <session> mcp:1 "+name+" {\"action\":\"list\"}"))
+				"  "+shape))
 		}
 	}
 	return name, args, nil
@@ -97,41 +105,14 @@ func splitToolCall(stmt directive.Statement, payload string) (string, map[string
 // to walk that structure itself — in a shell, with no JSON parser. The text is the
 // answer; the envelope is transport.
 func (s *Server) mcpResultText(ctx context.Context, stmt directive.Statement, h *jrpcHandle, reply string, win termArgs) envelope.Slot {
-	var doc struct {
-		Error  json.RawMessage `json:"error"`
-		Result *struct {
-			IsError bool `json:"isError"`
-			Content []struct {
-				Type     string `json:"type"`
-				Text     string `json:"text"`
-				MimeType string `json:"mimeType"`
-				Data     string `json:"data"`
-			} `json:"content"`
-		} `json:"result"`
-	}
 	// A SHAPE THIS DOES NOT RECOGNISE IS SHOWN AS IT ARRIVED, not summarised. That
 	// covers a peer error (frameReply turns it into a failing reply with its hints)
 	// and any method whose result is not a tool result.
-	if err := json.Unmarshal([]byte(reply), &doc); err != nil || doc.Error != nil ||
-		doc.Result == nil || doc.Result.Content == nil {
+	body, isError, ok := unpackToolResult(reply)
+	if !ok {
 		return s.frameReply(ctx, stmt, h, reply, win)
 	}
-
-	var parts []string
-	for _, c := range doc.Result.Content {
-		switch {
-		case c.Type == "text" || c.Text != "":
-			parts = append(parts, c.Text)
-		case c.Data != "":
-			// Base64 inline is not readable and not short: name it rather than
-			// dropping it. `--json` is the way to get the bytes.
-			parts = append(parts, fmt.Sprintf("[%s: %s, %s base64]", orDash(c.Type), orDash(c.MimeType), humanBytes(int64(len(c.Data)))))
-		default:
-			parts = append(parts, "["+orDash(c.Type)+"]")
-		}
-	}
-	body := strings.Join(parts, "\n")
-	if doc.Result.IsError {
+	if isError {
 		// A TOOL THAT REPORTED FAILURE DID NOT SUCCEED (issue #159). MCP carries that
 		// in the result rather than in an error object, so a status-only caller read
 		// 200 and concluded the work was done.
@@ -159,6 +140,46 @@ func (s *Server) mcpResultText(ctx context.Context, stmt directive.Statement, h 
 	return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path}, Body: body}
 }
 
+// unpackToolResult renders a tools/call answer as the text the tool returned.
+//
+// ONE IMPLEMENTATION FOR EVERY PEER (issue #316): the HTTP form reaches the same server
+// over a socket and the stdio form over a pipe, and a caller that switched transports
+// must not find that "the text of the result" changed shape. ok is false when the frame
+// is not a tool result at all — a peer error, a notification, any other method — and
+// each caller then decides how to show it.
+func unpackToolResult(reply string) (body string, isError bool, ok bool) {
+	var doc struct {
+		Error  json.RawMessage `json:"error"`
+		Result *struct {
+			IsError bool `json:"isError"`
+			Content []struct {
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				MimeType string `json:"mimeType"`
+				Data     string `json:"data"`
+			} `json:"content"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(reply), &doc); err != nil || doc.Error != nil ||
+		doc.Result == nil || doc.Result.Content == nil {
+		return "", false, false
+	}
+	var parts []string
+	for _, c := range doc.Result.Content {
+		switch {
+		case c.Type == "text" || c.Text != "":
+			parts = append(parts, c.Text)
+		case c.Data != "":
+			// Base64 inline is not readable and not short: name it rather than
+			// dropping it. `--json` is the way to get the bytes.
+			parts = append(parts, fmt.Sprintf("[%s: %s, %s base64]", orDash(c.Type), orDash(c.MimeType), humanBytes(int64(len(c.Data)))))
+		default:
+			parts = append(parts, "["+orDash(c.Type)+"]")
+		}
+	}
+	return strings.Join(parts, "\n"), doc.Result.IsError, true
+}
+
 // mcpToolList answers `get <session> mcp:1 tools` — the peer's own table, read live.
 //
 // WHY IT IS READ RATHER THAN REMEMBERED: the same reason `cdp protocol` is. A cached
@@ -179,26 +200,49 @@ func (s *Server) mcpToolList(ctx context.Context, stmt directive.Statement, h *j
 	if err != nil {
 		return jrpcError(stmt, err)
 	}
+	tools, ok := parseToolList(reply)
+	if !ok {
+		return s.frameReply(ctx, stmt, h, reply, win)
+	}
+	return renderToolTable(stmt, tools, peerAddress(h.sessionID, h.kind, h.index),
+		stmt.Target+" "+h.kind+":"+h.index, tool)
+}
+
+// toolEntry is one row of a peer's tools/list answer.
+type toolEntry struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"inputSchema"`
+}
+
+// parseToolList reads a tools/list answer.
+//
+// IT IS PARSED HERE RATHER THAN AT EACH DOOR because the answer is the same whichever
+// transport carried it (issue #316): an HTTP peer and an extension's stdio channel run
+// the same server, and a second parser would be a second place for the shape to drift.
+func parseToolList(reply string) ([]toolEntry, bool) {
 	var doc struct {
 		Error  json.RawMessage `json:"error"`
 		Result *struct {
-			Tools []struct {
-				Name        string          `json:"name"`
-				Description string          `json:"description"`
-				InputSchema json.RawMessage `json:"inputSchema"`
-			} `json:"tools"`
+			Tools []toolEntry `json:"tools"`
 		} `json:"result"`
 	}
-	if err := json.Unmarshal([]byte(reply), &doc); err != nil {
-		return s.frameReply(ctx, stmt, h, reply, win)
+	if err := json.Unmarshal([]byte(reply), &doc); err != nil || doc.Error != nil || doc.Result == nil {
+		return nil, false
 	}
-	if doc.Error != nil || doc.Result == nil {
-		return s.frameReply(ctx, stmt, h, reply, win)
-	}
+	return doc.Result.Tools, true
+}
 
-	addr := peerAddress(h.sessionID, h.kind, h.index)
+// renderToolTable prints a peer's tool table, and one tool's full schema when a name is
+// given.
+//
+// ref IS HOW THE CALLER ADDRESSES THE PEER, spelled the way that peer is addressed: `sid
+// mcp:1` for an HTTP peer, the channel handle for an extension's stdio server. The
+// "next call" lines are built from it, because a table that ends by teaching an address
+// the caller cannot use is worse than no hint at all.
+func renderToolTable(stmt directive.Statement, tools []toolEntry, addr, ref, tool string) envelope.Slot {
 	if tool != "" {
-		for _, t := range doc.Result.Tools {
+		for _, t := range tools {
 			if t.Name != tool {
 				continue
 			}
@@ -213,11 +257,11 @@ func (s *Server) mcpToolList(ctx context.Context, stmt directive.Statement, h *j
 				schema = "{}"
 			}
 			b.WriteString(indentJSON(schema))
-			b.WriteString("\n\ncall " + stmt.Target + " " + h.kind + ":" + h.index + " " + t.Name + " {…}")
+			b.WriteString("\n\ncall " + ref + " " + t.Name + " {…}")
 			return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path}, Body: b.String()}
 		}
 		var names []string
-		for _, t := range doc.Result.Tools {
+		for _, t := range tools {
 			names = append(names, t.Name)
 		}
 		return envelope.Slot{Code: 404, Headers: map[string]string{
@@ -225,19 +269,19 @@ func (s *Server) mcpToolList(ctx context.Context, stmt directive.Statement, h *j
 		}, Body: "no tool named " + tool + " on " + addr + ". It lists: " + strings.Join(names, ", ")}
 	}
 
-	if len(doc.Result.Tools) == 0 {
+	if len(tools) == 0 {
 		return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path},
 			Body: "0 tools. The peer answered tools/list with an empty table."}
 	}
 	width := 0
-	for _, t := range doc.Result.Tools {
+	for _, t := range tools {
 		if n := utf8.RuneCountInString(t.Name); n > width {
 			width = n
 		}
 	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("%d tool(s) on %s\n", len(doc.Result.Tools), addr))
-	for _, t := range doc.Result.Tools {
+	b.WriteString(fmt.Sprintf("%d tool(s) on %s\n", len(tools), addr))
+	for _, t := range tools {
 		b.WriteString("  " + t.Name + strings.Repeat(" ", width-utf8.RuneCountInString(t.Name)))
 		if desc := firstLineOf(t.Description); desc != "" {
 			b.WriteString("  " + desc)
@@ -247,8 +291,8 @@ func (s *Server) mcpToolList(ctx context.Context, stmt directive.Statement, h *j
 		}
 		b.WriteString("\n")
 	}
-	b.WriteString("\none tool's full schema: get " + stmt.Target + " " + h.kind + ":" + h.index + " tools <name>")
-	b.WriteString("\ncall one:              call " + stmt.Target + " " + h.kind + ":" + h.index + " <tool> {…}")
+	b.WriteString("\none tool's full schema: get " + ref + " tools <name>")
+	b.WriteString("\ncall one:              call " + ref + " <tool> {…}")
 	return envelope.Slot{Code: 200, Headers: map[string]string{"Path": stmt.Path}, Body: b.String()}
 }
 

@@ -415,6 +415,45 @@ func (r *Reconciler) channelStatuses(ext *Extension, st *extState) []ChannelStat
 	return out
 }
 
+// KindOfShell reports which extension owns a channel handle and what kind of channel it
+// is: ChannelStdio, ChannelPTY or ChannelHTTP. ok is false when no extension owns the
+// shell (a caller's own instance, an ordinary session).
+//
+// THE KIND IS THE POINT, NOT THE NAME (issue #316). A caller that holds a handle wants
+// to know what the process on it speaks: a stdio channel runs a line-delimited MCP
+// server, a pty is a terminal that echoes, and an http channel is dialled rather than
+// run. Answering "some extension owns it" would leave the same guess the handle alone
+// does.
+func (r *Reconciler) KindOfShell(shellID string) (name, kind string, ok bool) {
+	shellID = strings.TrimSpace(shellID)
+	if shellID == "" {
+		return "", "", false
+	}
+	r.mu.Lock()
+	states := make(map[string]*extState, len(r.states))
+	for key, st := range r.states {
+		states[key] = st
+	}
+	r.mu.Unlock()
+	for _, st := range states {
+		chName, owns := st.channelOfShell(shellID)
+		if !owns {
+			continue
+		}
+		name = st.name()
+		ext, err := r.store.Load(name)
+		if err != nil {
+			return name, "", true
+		}
+		ch, found := pickChannel(ext.EffectiveChannels(), chName)
+		if !found {
+			return name, "", true
+		}
+		return name, ch.Kind, true
+	}
+	return "", "", false
+}
+
 // NameOfShell reports which extension owns a channel handle, or "" for one that belongs
 // to nobody (a caller's own instance, an ordinary session).
 //
