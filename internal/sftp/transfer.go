@@ -636,30 +636,54 @@ const maxReplaceSize = 16 << 20 // 16 MiB
 //
 // Returns the number of bytes written (the new file's size).
 func (s *Client) ReplaceInFile(remotePath, oldText, newText string) (int64, error) {
+	rep, err := s.ReplaceInFileReport(remotePath, oldText, newText)
+	return rep.Bytes, err
+}
+
+// ReplaceReport is what an exact replace did, beyond "it wrote N bytes".
+//
+// THE CALLER COULD NOT SEE ITS OWN EDIT (issue #357 §1.2). `--old-text/--new-text`
+// answered with a byte count, so "did it change the line I meant" was answered by
+// reading the whole file back — the exact cost this primitive exists to avoid. The
+// report carries the line that changed, before and after, which is the smallest thing
+// that answers the question without re-reading anything.
+type ReplaceReport struct {
+	// Bytes is the new file's size.
+	Bytes int64
+	// Line is the 1-based line the match started on, and Old/New are that whole line
+	// before and after the edit — a diff hunk with no context, because one line is what
+	// an exact replace of a unique pattern can change.
+	Line int
+	Old  string
+	New  string
+}
+
+// ReplaceInFileReport is ReplaceInFile, reporting where the edit landed.
+func (s *Client) ReplaceInFileReport(remotePath, oldText, newText string) (ReplaceReport, error) {
 	if oldText == "" {
-		return 0, fmt.Errorf("old_text must not be empty")
+		return ReplaceReport{}, fmt.Errorf("old_text must not be empty")
 	}
 	f, err := s.client.Open(remotePath)
 	if err != nil {
-		return 0, fmt.Errorf("open remote file: %w", err)
+		return ReplaceReport{}, fmt.Errorf("open remote file: %w", err)
 	}
 	defer f.Close()
 
 	fi, err := f.Stat()
 	if err != nil {
-		return 0, fmt.Errorf("stat remote file: %w", err)
+		return ReplaceReport{}, fmt.Errorf("stat remote file: %w", err)
 	}
 	if fi.IsDir() {
-		return 0, fmt.Errorf("%s: %w; `get <session> file <path> --op stat` lists it, and the shell can list it too", remotePath, ErrIsDirectory)
+		return ReplaceReport{}, fmt.Errorf("%s: %w; `get <session> file <path> --op stat` lists it, and the shell can list it too", remotePath, ErrIsDirectory)
 	}
 	if fi.Size() > maxReplaceSize {
-		return 0, fmt.Errorf("%s is %d bytes, over the %d-byte limit for exact replace; use file read + file write with --offset for a file this large",
+		return ReplaceReport{}, fmt.Errorf("%s is %d bytes, over the %d-byte limit for exact replace; use file read + file write with --offset for a file this large",
 			remotePath, fi.Size(), maxReplaceSize)
 	}
 
 	original, err := io.ReadAll(io.LimitReader(f, maxReplaceSize+1))
 	if err != nil {
-		return 0, fmt.Errorf("read remote file: %w", err)
+		return ReplaceReport{}, fmt.Errorf("read remote file: %w", err)
 	}
 	// CLOSE BEFORE RENAMING OVER IT. The deferred Close above runs when the function
 	// returns, which is after the rename — fine on POSIX, where an open handle does not
@@ -668,19 +692,23 @@ func (s *Client) ReplaceInFile(remotePath, oldText, newText string) (int64, erro
 	// process". Closing here (and tolerating the second Close from the defer) makes the
 	// handle's lifetime match the read that needs it.
 	if err := f.Close(); err != nil {
-		return 0, fmt.Errorf("close remote file: %w", err)
+		return ReplaceReport{}, fmt.Errorf("close remote file: %w", err)
 	}
 
 	count := strings.Count(string(original), oldText)
 	if count == 0 {
-		return 0, fmt.Errorf("%w: %q does not appear in %s", ErrPatternNotFound, previewForError(oldText), remotePath)
+		return ReplaceReport{}, fmt.Errorf("%w: %q does not appear in %s", ErrPatternNotFound, previewForError(oldText), remotePath)
 	}
 	if count > 1 {
-		return 0, fmt.Errorf("%w: %q appears %d times in %s; include more surrounding context so it matches once",
+		return ReplaceReport{}, fmt.Errorf("%w: %q appears %d times in %s; include more surrounding context so it matches once",
 			ErrPatternAmbiguous, previewForError(oldText), count, remotePath)
 	}
 
 	updated := strings.Replace(string(original), oldText, newText, 1)
+	// WHERE THE EDIT LANDED, computed from the bytes already in hand (#357 §1.2). The
+	// line is the one the MATCH started on, and the two strings are that whole line
+	// before and after — so a one-line config edit is visible in the reply itself.
+	line, oldLine, newLine := changedLine(string(original), updated)
 
 	// Temporary file in the same directory, so the rename stays within one
 	// filesystem and is therefore atomic.
@@ -688,13 +716,13 @@ func (s *Client) ReplaceInFile(remotePath, oldText, newText string) (int64, erro
 
 	if err := s.writeWholeFile(tmpPath, []byte(updated)); err != nil {
 		_ = s.RemoveFile(tmpPath)
-		return 0, fmt.Errorf("write temporary file: %w", err)
+		return ReplaceReport{}, fmt.Errorf("write temporary file: %w", err)
 	}
 	// Preserve the mode: a replace must not silently change permissions, which is
 	// exactly what a freshly created temp file would otherwise do (0644).
 	if err := s.client.Chmod(tmpPath, fi.Mode().Perm()); err != nil {
 		_ = s.RemoveFile(tmpPath)
-		return 0, fmt.Errorf("preserve permissions on temporary file: %w", err)
+		return ReplaceReport{}, fmt.Errorf("preserve permissions on temporary file: %w", err)
 	}
 	// RENAME OVER THE TARGET IS NOT PORTABLE. On POSIX the rename replaces the
 	// destination atomically, which is the whole reason for the temp file. Windows
@@ -705,15 +733,51 @@ func (s *Client) ReplaceInFile(remotePath, oldText, newText string) (int64, erro
 	if err := s.RenameFile(tmpPath, remotePath); err != nil {
 		if rmErr := s.RemoveFile(remotePath); rmErr != nil {
 			_ = s.RemoveFile(tmpPath)
-			return 0, fmt.Errorf("rename temporary file over %s: %w (and removing the target first failed: %w)",
+			return ReplaceReport{}, fmt.Errorf("rename temporary file over %s: %w (and removing the target first failed: %w)",
 				remotePath, err, rmErr)
 		}
 		if err := s.RenameFile(tmpPath, remotePath); err != nil {
 			_ = s.RemoveFile(tmpPath)
-			return 0, fmt.Errorf("rename temporary file over %s after removing it: %w", remotePath, err)
+			return ReplaceReport{}, fmt.Errorf("rename temporary file over %s after removing it: %w", remotePath, err)
 		}
 	}
-	return int64(len(updated)), nil
+	return ReplaceReport{Bytes: int64(len(updated)), Line: line, Old: oldLine, New: newLine}, nil
+}
+
+// changedLine returns the 1-based line where original and updated first differ, and
+// that line before and after. For a multi-line replacement it names the first changed
+// line — enough to orient the reader without printing the file.
+func changedLine(before, after string) (line int, oldLine, newLine string) {
+	pos := 0
+	for pos < len(before) && pos < len(after) && before[pos] == after[pos] {
+		pos++
+	}
+	line = 1 + strings.Count(before[:pos], "\n")
+	oldStart := strings.LastIndexByte(before[:pos], '\n') + 1
+	oldEnd := strings.IndexByte(before[oldStart:], '\n')
+	if oldEnd < 0 {
+		oldLine = before[oldStart:]
+	} else {
+		oldLine = before[oldStart : oldStart+oldEnd]
+	}
+	newStart := oldStart
+	if newStart > len(after) {
+		newStart = len(after)
+	}
+	newEnd := strings.IndexByte(after[newStart:], '\n')
+	if newEnd < 0 {
+		newLine = after[newStart:]
+	} else {
+		newLine = after[newStart : newStart+newEnd]
+	}
+	const capLen = 200
+	if len(oldLine) > capLen {
+		oldLine = oldLine[:capLen] + "…"
+	}
+	if len(newLine) > capLen {
+		newLine = newLine[:capLen] + "…"
+	}
+	return line, strings.TrimSuffix(oldLine, "\r"), strings.TrimSuffix(newLine, "\r")
 }
 
 // writeWholeFile creates (or truncates) remotePath and writes data.

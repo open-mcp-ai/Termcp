@@ -649,6 +649,44 @@ check_not "#310 早先的标记不算这一次" "$R310d" '"Completion"'
 
 term "close $H310" >/dev/null
 
+# ---------------------------------------------------------------------------
+# #357 §1.3 — secrets 的值不出现在回复回显里，但服务端拿到的仍是真值
+echo
+echo "== #357 secrets 不回显"
+H357=$(body "$(term "connect internal --name sec357")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+check "#357 起了通道" "$H357" ':'
+
+W357=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"write "+sys.argv[1]+" file /tmp/dog357.txt --data $SV","secrets":{"SV":"DOGFOOD-SECRET-357"},"timeout":3}))' "$H357")")
+check_not "#357 回显里没有 secret 的值" "$W357" 'DOGFOOD-SECRET-357'
+check "#357 回显里留着引用名（可再抄一次）" "$W357" '$SV'
+check "#357 写入本身成功" "$W357" 'ok: true'
+# 防自证：值从文件读回来，证明服务端拿到的是真值而不是被打码后的字符串。
+R357=$(body "$(term "read $H357 file /tmp/dog357.txt")")
+check "#357 落盘的是真值" "$R357" 'DOGFOOD-SECRET-357'
+# 对照：vars 是记录的一部分，仍原样回显。
+V357=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"write "+sys.argv[1]+" file /tmp/dog357b.txt --data $VV","vars":{"VV":"DOGFOOD-PLAIN-357"},"timeout":3}))' "$H357")")
+check "#357 vars 仍原样回显（它是记录）" "$V357" 'DOGFOOD-PLAIN-357'
+SID357="${H357%%:*}"; term "rm $SID357 file /tmp/dog357.txt; rm $SID357 file /tmp/dog357b.txt" >/dev/null
+term "close $H357" >/dev/null
+
+# ---------------------------------------------------------------------------
+# #357 §1.2 — 精确替换的回执要说清改了哪一行，而不是只报字节数
+echo
+echo "== #357 编辑可见性"
+H357E=$(body "$(term "connect internal --name edit357")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+check "#357 起了通道" "$H357E" ':'
+S357E="${H357E%%:*}"
+termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"write "+sys.argv[1]+" file /tmp/edit357.txt --data $D","vars":{"D":"port = 80\ntimeout = 5\nretries = 3\n"},"timeout":3}))' "$H357E")" >/dev/null
+E357=$(body "$(term "write $H357E file /tmp/edit357.txt --old-text 'timeout = 5' --new-text 'timeout = 30'")")
+check "#357 回执给出行号" "$E357" 'line: 2'
+check "#357 回执给出改动前后" "$E357" '- timeout = 5 | + timeout = 30'
+check "#357 仍然报字节数" "$E357" 'bytes_written'
+term "rm $S357E file /tmp/edit357.txt" >/dev/null
+term "close $H357E" >/dev/null
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi
