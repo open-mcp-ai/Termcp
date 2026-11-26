@@ -81,6 +81,13 @@ func TestASecretIsNotWrittenToTheLog(t *testing.T) {
 // If the two diverged in substitution — quoting, escaping, the unused-name refusal —
 // the caller would have to know which table a value came from to predict what reaches
 // the shell, and that is exactly the kind of difference nobody remembers.
+//
+// WHAT REACHED THE SHELL IS NOW READ FROM THE OUTPUT, NOT FROM `Path:`. The reply used
+// to echo the expanded value in `Path:` and this test read the substitution off that
+// line — which is the leak issue #357 §1.3 reports: a credential came back in the reply
+// because the statement was echoed with its values filled in. The masking moved the
+// observable, and the substitution is still exactly what it was: the pipe echoes what it
+// was given, so `echo two` in the BODY is the same proof `echo two` in `Path:` was.
 func TestSecretsExpandLikeVars(t *testing.T) {
 	s := newTestServer(t)
 	h := openPipe(t, s, "cat")
@@ -91,13 +98,21 @@ func TestSecretsExpandLikeVars(t *testing.T) {
 		"vars":    map[string]any{"A": "echo one"},
 		"secrets": map[string]any{"B": "echo two"},
 	})
-	if strings.Contains(got, "$A") || strings.Contains(got, "$B") {
-		t.Fatalf("a reference was left unexpanded:\n%s", got)
-	}
 	// cat echoes what it is given, so both values are in the reply — the point is that
 	// the substitution happened, not which table named the value.
 	if !strings.Contains(got, "echo one") || !strings.Contains(got, "echo two") {
 		t.Fatalf("the two tables did not expand the same way:\n%s", got)
+	}
+	// AND THE PATH KEEPS THE TWO APART, which is the one difference the tables have:
+	// `vars` is logged and echoed verbatim, `secrets` is not.
+	if !strings.Contains(got, "Path: run "+h+" echo one") {
+		t.Fatalf("a vars value is part of the record and must still be echoed in Path:\n%s", got)
+	}
+	if strings.Contains(got, "Path: run "+h+" echo two") {
+		t.Fatalf("a secret value came back in Path:, which is the reply the caller reads:\n%s", got)
+	}
+	if !strings.Contains(got, "Path: run "+h+" $B") {
+		t.Fatalf("the masked Path must still name the reference, so the line is copyable again:\n%s", got)
 	}
 }
 
