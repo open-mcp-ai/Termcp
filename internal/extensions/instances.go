@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/open-mcp-ai/termcp/internal/clock"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -831,4 +832,58 @@ func targetHostOf(ext *Extension, target string) string {
 		return t.Host
 	}
 	return strings.TrimSpace(ext.Target)
+}
+
+// ExtensionOf names the extension a session or channel belongs to (issue #323).
+//
+// WHY THE REFUSAL NEEDS IT. A whitelist refusal says what this session may not do; a
+// caller that reads only that knows the wall and not the door. Naming the extension turns
+// the sentence into one action — `get ext <name>`, or `edit ext <name> --allow …` — and it
+// is the one fact the refusing layer does not have, because it holds a session and the
+// session holds a capability list, not a template.
+//
+// ONE SESSION MAY SERVE SEVERAL EXTENSIONS: a group shares a connection when the host and
+// the whitelist match (#331), so the answer is the FIRST extension attached to it in a
+// stable order. That is enough for a hint and honest about being a hint: the refusal tells
+// the caller which template to look at, and `get ext` is where the whole list is.
+func (r *Reconciler) ExtensionOf(sessionID, shellID string) (string, bool) {
+	if sessionID == "" && shellID == "" {
+		return "", false
+	}
+	r.mu.Lock()
+	states := make([]*extState, 0, len(r.states))
+	for _, st := range r.states {
+		states = append(states, st)
+	}
+	r.mu.Unlock()
+	sort.Slice(states, func(i, j int) bool { return states[i].name() < states[j].name() })
+	for _, st := range states {
+		name := st.name()
+		st.mu.Lock()
+		match := sessionID != "" && (st.sessionID == sessionID || st.closedSessionID == sessionID)
+		if !match && shellID != "" {
+			match = st.shellID == shellID || st.closedShellID == shellID
+		}
+		if !match && sessionID != "" {
+			for _, ex := range st.extra {
+				if ex.sessionID == sessionID {
+					match = true
+					break
+				}
+			}
+		}
+		if !match && shellID != "" {
+			for _, ex := range st.extra {
+				if ex.shellID == shellID {
+					match = true
+					break
+				}
+			}
+		}
+		st.mu.Unlock()
+		if match {
+			return name, true
+		}
+	}
+	return "", false
 }

@@ -240,13 +240,17 @@ func (g toolGuard) lookupSessionID(id string) *session.Session {
 // The namespace check is separate and comes first: a caller that may not reach
 // the session at all is not told what the session's whitelist says.
 func (g toolGuard) checkSession(sess *session.Session, toolName string, c gate, args map[string]any) *mcp.CallToolResult {
+	// THE EXTENSION'S NAME IS LOOKED UP ONLY WHEN A REFUSAL HAPPENS (issue #323). This
+	// runs on every guarded call, and `ExtensionOf` takes the reconciler's lock and walks
+	// its states: a name that a refusal would print is not worth paying for on the calls
+	// that are allowed.
 	if !c.known {
 		// An operation with no capability row has no entry a whitelist could
 		// name, so a restricted session cannot reach it.
-		return refuseSession(sess, "\x00unknown", toolName)
+		return refuseSessionOn(sess, "\x00unknown", toolName, g.extensionOf(sess))
 	}
-	if bad := refuseSession(sess, c.ID, toolName); bad != nil {
-		return bad
+	if !sess.Restriction().Allows(c.ID) {
+		return refuseSessionOn(sess, c.ID, toolName, g.extensionOf(sess))
 	}
 	r := sess.Restriction()
 	// Path arguments are declared per capability; reading is as gated as writing,
@@ -257,8 +261,18 @@ func (g toolGuard) checkSession(sess *session.Session, toolName string, c gate, 
 			continue
 		}
 		if !r.AllowsPath(path) {
-			return toolError(CodeForbidden, "%s", session.ForbiddenPath(key, path))
+			return toolError(CodeForbidden, "%s", session.ForbiddenPathOn(key, path, g.extensionOf(sess)))
 		}
 	}
 	return nil
+}
+
+// extensionOf names the extension behind a session, for a refusal that wants to say which
+// template to look at. Empty when nothing knows — a refusal still names the capability.
+func (g toolGuard) extensionOf(sess *session.Session) string {
+	if g.server == nil || g.server.extensions == nil || sess == nil {
+		return ""
+	}
+	name, _ := g.server.extensions.ExtensionOf(sess.ID, "")
+	return name
 }
