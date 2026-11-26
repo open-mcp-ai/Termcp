@@ -38,6 +38,23 @@ func (h *Handler) sftpFor(sess *session.Session, sshClient *ssh.Client) (*sftp.C
 	return sftp.NewClient(sshClient)
 }
 
+// wirePath adapts a caller's Windows spelling to the POSIX wire form SFTP carries, and
+// reports the adaptation in a response header (issue #186).
+//
+// IT IS APPLIED ONLY ON THE REMOTE BRANCH. These handlers run the SAME path two ways:
+// over SFTP when the session has a connection, and through os.* when it is the internal
+// loopback profile. On Windows `os.Stat("C:\\tc")` is already correct, and rewriting it
+// to `/C:/tc` would break a working local call — so the rewrite belongs where the wire
+// form is what the protocol expects, not at the top of the handler.
+func wirePath(w http.ResponseWriter, p string) string {
+	spelled, adapted := sftp.WireSpelling(p)
+	if !adapted {
+		return p
+	}
+	w.Header().Set("Path-Adapted", p+" -> "+spelled)
+	return spelled
+}
+
 // resolveFileSession resolves the session a file route names and applies the
 // session's capability whitelist before the handler touches the filesystem.
 //
@@ -84,6 +101,9 @@ func (h *Handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
 	sess, sshClient, ok := h.resolveFileSession(sid, capability.FileStat, [][2]string{{"path", path}}, w)
 	if !ok {
 		return
+	}
+	if sshClient != nil {
+		path = wirePath(w, path)
 	}
 	if sshClient == nil {
 		// Internal: use local filesystem
@@ -152,6 +172,9 @@ func (h *Handler) handleDownloadFile(w http.ResponseWriter, r *http.Request) {
 	sess, sshClient, ok := h.resolveFileSession(sid, capability.FileRead, [][2]string{{"path", path}}, w)
 	if !ok {
 		return
+	}
+	if sshClient != nil {
+		path = wirePath(w, path)
 	}
 	if sshClient == nil {
 		serveLocalFile(w, r, path, offset, length, isRange, hdr)
@@ -355,6 +378,9 @@ func (h *Handler) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if sshClient != nil {
+		path = wirePath(w, path)
+	}
 	if sshClient == nil {
 		// Internal / local filesystem.
 		flag := os.O_RDWR | os.O_CREATE
@@ -406,6 +432,9 @@ func (h *Handler) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if sshClient != nil {
+		path = wirePath(w, path)
+	}
 	if sshClient == nil {
 		if err := os.Remove(path); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -446,6 +475,10 @@ func (h *Handler) handleRenameFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if sshClient != nil {
+		from = wirePath(w, from)
+		to = wirePath(w, to)
+	}
 	if sshClient == nil {
 		if err := os.Rename(from, to); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
@@ -479,6 +512,9 @@ func (h *Handler) handleMakeDir(w http.ResponseWriter, r *http.Request) {
 	sess, sshClient, ok := h.resolveFileSession(sid, capability.FileMkdir, [][2]string{{"path", path}}, w)
 	if !ok {
 		return
+	}
+	if sshClient != nil {
+		path = wirePath(w, path)
 	}
 	if sshClient == nil {
 		if err := os.MkdirAll(path, 0755); err != nil {

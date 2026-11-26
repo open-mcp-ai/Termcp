@@ -687,6 +687,87 @@ check "#357 仍然报字节数" "$E357" 'bytes_written'
 term "rm $S357E file /tmp/edit357.txt" >/dev/null
 term "close $H357E" >/dev/null
 
+# ---------------------------------------------------------------------------
+# #316 — pipe 模式的 stdio MCP 扩展，按 HTTP peer 的方式调用工具
+echo
+echo "== #316 扩展 stdio 通道即 MCP peer"
+cat > "$WORK/stub316.py" <<'PYEOF'
+import sys, json
+def out(o):
+    sys.stdout.write(json.dumps(o) + "\n"); sys.stdout.flush()
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        req = json.loads(line)
+    except Exception:
+        continue
+    mid, method = req.get("id"), req.get("method")
+    if mid is None:
+        continue
+    if method == "initialize":
+        out({"jsonrpc": "2.0", "id": mid, "result": {"protocolVersion": "2025-06-18",
+             "capabilities": {"tools": {}}, "serverInfo": {"name": "stub316", "version": "1"}}})
+    elif method == "tools/list":
+        out({"jsonrpc": "2.0", "id": mid, "result": {"tools": [
+            {"name": "ping316", "description": "returns pong316", "inputSchema": {"type": "object"}},
+            {"name": "fail316", "description": "reports failure", "inputSchema": {"type": "object"}}]}})
+    elif method == "tools/call":
+        name = (req.get("params") or {}).get("name")
+        if name == "ping316":
+            out({"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": "pong316"}]}})
+        elif name == "fail316":
+            out({"jsonrpc": "2.0", "id": mid, "result": {"content": [{"type": "text", "text": "boom316"}], "isError": True}})
+        else:
+            out({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": "no tool " + str(name)}})
+    else:
+        out({"jsonrpc": "2.0", "id": mid, "result": {}})
+PYEOF
+term "create ext stub316 --target internal --command python3 --args $WORK/stub316.py" >/dev/null
+# THE HANDLE IS THE EXTENSION'S OWN shell_id, NOT `session:1`: extensions that dial the
+# same host with the same capability set SHARE one connection, so index 1 may belong to a
+# neighbour — and the handshake would then be written to somebody else's process.
+body "$(term "open ext stub316")" >/dev/null
+H316=$(body "$(term "get ext stub316")" | grep -oE 'shell_id: [0-9a-f]+' | awk '{print $2}')
+L316=$(body "$(term "get $H316 tools")")
+check "#316 get <channel> tools 列出工具表" "$L316" 'ping316'
+check "#316 工具表教的是本地址的调用形状" "$L316" "call $H316 <tool>"
+C316=$(body "$(term "call $H316 ping316 {}")")
+check "#316 call <channel> <tool> 返回工具文本" "$C316" 'pong316'
+check_not "#316 返回的不是信封" "$C316" '"jsonrpc"'
+F316=$(body "$(term "call $H316 fail316 {}")")
+check "#316 isError 报成失败而不是成功" "$(term "call $H316 fail316 {}")" '"code":500'
+check "#316 失败保留工具自己的话" "$F316" 'boom316'
+check "#316 peer 的 error 对象指名消息" "$(body "$(term "call $H316 nosuch {}")")" 'no tool nosuch'
+check "#316 --json 仍可取原始信封" "$(body "$(term "call $H316 --json ping316 {}")")" '"jsonrpc"'
+P316=$(body "$(term "connect internal --argv sh")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+check "#316 普通 pipe 仍只收裸帧" "$(term "call $P316 ping316 {}")" 'the frame is not JSON'
+term "close $P316" >/dev/null
+term "close $H316" >/dev/null
+
+# ---------------------------------------------------------------------------
+# #186 的适配半边 — 反斜杠的盘符路径被改写，并且回执说出来
+echo
+echo "== #186 反斜杠路径适配"
+H186=$(body "$(term "connect internal --name spell186")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+A186=$(body "$(term "read $H186 file 'C:\\tc\\a.txt'")")
+check "#186 回执说出改了拼写" "$A186" 'C:\tc\a.txt -> /C:/tc/a.txt'
+# 白名单按同一份规则比较：声明 /C:/tc 就应当放行反斜杠写法（否则是 403 而不是 404）。
+term "create ext sp186 --target internal --paths /C:/tc" >/dev/null
+body "$(term "open ext sp186")" >/dev/null
+SID186=$(body "$(term "get ext sp186")" | grep -oE 'session_id: [0-9a-f]+' | awk '{print $2}')
+W186=$(term "read $SID186 file 'C:\\tc\\a.txt'")
+check_not "#186 声明过的树不会因拼写被拒" "$W186" 'TERM/1 403'
+check "#186 同一次调用也说出适配" "$W186" '/C:/tc/a.txt'
+# 逃生口：名字里真带反斜杠的 POSIX 文件，原样可达。
+printf 'LITERAL-BACKSLASH\n' > "$WORK/C:\tc.txt"
+LIT186=$(body "$(term "read $H186 file '$WORK/C:\\tc.txt'")")
+check "#186 名字含反斜杠的文件仍可读" "$LIT186" 'LITERAL-BACKSLASH'
+check_not "#186 且没有被改写" "$LIT186" 'Path-Adapted'
+term "close $H186" >/dev/null
+term "rm ext sp186" >/dev/null
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi
