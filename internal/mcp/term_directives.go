@@ -836,6 +836,11 @@ func (s *Server) finishRun(ctx context.Context, stmt directive.Statement, win te
 			// A searched run is still a run: the caller needs the offset its input landed
 			// at as much here as anywhere (issue #194).
 			slot.Headers["Input-At"] = strconv.FormatInt(start, 10)
+			// AND SO IS ITS COMPLETION (issue #310 P3.1): a shell that reports its own
+			// exit must not be heard only on the spelling that did not search.
+			if end, ok := s.outputSizeFor(stmt.Target); ok {
+				s.noteShellCompletion(ctx, stmt, &slot, start, end)
+			}
 		}
 		// A searched run is evidence about completion as much as a plain one: what the
 		// next `run` may assume must not depend on which spelling this one used.

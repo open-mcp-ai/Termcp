@@ -70,6 +70,86 @@ const (
 		`|(?m)^(?:\x1b\[[0-9;]*m)*[^\r\n]{0,120}?[❯➜λ›»][^❯➜λ›»\r\n]{0,120}[ \t]*(?:\x1b\[[0-9;]*m)*\r?$`
 )
 
+// osc133Re is osc133Done compiled once, for the passive scan (#310 P3): a run that did
+// not ask for `--until exit` still gets the shell's own report if the shell sent one.
+var osc133Re = regexp.MustCompile(osc133Done)
+
+// oscScanTail bounds the passive scan, and it is small on purpose: the shell emits its
+// completion report when the command ENDS, so the marker is the last thing in the window
+// (nothing but the prompt follows it). A `cat` of a large file must not cost a second
+// copy of itself to find a marker that is already at the end, and a marker further back
+// than this belongs to a command the window did not cover. Not finding one in the tail
+// means "no claim" — the same answer a full scan that missed would give, so the cap
+// cannot produce a false statement.
+const oscScanTail = 8 << 10
+
+// noteShellCompletion adds the shell's own completion report to a run's reply, when the
+// shell sent one and the reply has no verdict yet (#310 P3.1).
+//
+// ONE FUNCTION FOR BOTH HALVES OF A RUN. `run --grep` reads through readGrepFrom and the
+// plain form through readSlotAfter; a machine with shell integration must not answer
+// "did it finish, with what code" only when the caller happened to search the output.
+func (s *Server) noteShellCompletion(ctx context.Context, stmt directive.Statement, slot *envelope.Slot, start, end int64) {
+	if slot.Code >= 400 || s.isPipe(stmt.Target) {
+		return
+	}
+	if slot.Headers == nil {
+		slot.Headers = map[string]string{}
+	} else if slot.Headers["Completion"] != "" {
+		// A caller's own `--until`, or an observed process exit, already answered.
+		return
+	}
+	if code, ok := s.shellExitInWindow(ctx, stmt.Target, start, end); ok {
+		slot.Headers["Completion"] = "exit"
+		slot.Headers["Exit-Code"] = strconv.Itoa(code)
+	}
+}
+
+// isPipe reports whether the channel is a process rather than a terminal: a pipe's
+// completion is its exit, observed directly, and a marker in its bytes would be the
+// program talking rather than a shell reporting.
+func (s *Server) isPipe(handle string) bool {
+	cs, bad := s.requireShell(handle)
+	return bad == nil && cs != nil && !s.ptyRunning(handle)
+}
+
+// shellExitInWindow looks for the shell's own completion report in a run's window and
+// returns the status it carries (#310 P3.1).
+//
+// IT IS THE SAME EVIDENCE `--until exit` USES, READ WITHOUT BEING ASKED. A shell with
+// integration enabled (bash/zsh/fish, starship, oh-my-posh, VS Code) emits
+// `OSC 133 ; D ; <exit>` when a command ends; a caller that does not know the marker
+// exists never names it, and until now that meant the one machine that could answer
+// "did it finish, with what code" precisely was the one where `run` reported nothing.
+//
+// ABSENCE IS NOT A VERDICT, so nothing here turns a missed scan into a claim: the header
+// is set only when a marker was actually read, and `Completion` keeps meaning "here is
+// the evidence that produced this".
+func (s *Server) shellExitInWindow(ctx context.Context, handle string, from, to int64) (int, bool) {
+	if to <= from {
+		return 0, false
+	}
+	if to-from > oscScanTail {
+		from = to - oscScanTail
+	}
+	raw, ok := s.peekRaw(ctx, handle, from, to)
+	if !ok {
+		return 0, false
+	}
+	locs := osc133Re.FindAllStringSubmatch(raw, -1)
+	if len(locs) == 0 {
+		return 0, false
+	}
+	// THE LAST ONE IS THIS COMMAND'S. A window can hold the markers of commands run
+	// before it (a `read`-shaped window, or a run whose start was set earlier), and the
+	// newest report is the one that answers "the command I just started".
+	code, err := strconv.Atoi(locs[len(locs)-1][1])
+	if err != nil {
+		return 0, false
+	}
+	return code, true
+}
+
 // untilSpec is one compiled `--until`.
 type untilSpec struct {
 	raw     string

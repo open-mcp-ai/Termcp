@@ -616,6 +616,39 @@ check "#328 并说明通道没了" "$(cat "$WORK/teardown.out")" 'channel ended'
 if [ "$elapsed" -lt 10 ]; then fast=yes; else fast="no(${elapsed}s)"; fi
 check "#328 而且很快（没有挂到窗口用完）" "$fast" 'yes'
 
+# ---------------------------------------------------------------------------
+# #310 Phase 3.1 — 被动 OSC 133：装了 shell integration 的机器，普通 run 也能拿到退出码
+#
+# 这里自己造标记（本机 zsh 没装 integration），验的是「读不读」而不是「shell 发不发」：
+# 标记进了 PTY 字节流，termcp 就该像 `--until exit` 那样把它读出来。
+echo
+echo "== #310 被动 OSC 133"
+H310=$(body "$(term "connect internal --name osc310")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+check "#310 起了通道" "$H310" ':'
+
+# 1) 不写 --until，标记照样被读出来（此前只认 --until exit）。
+R310=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"run "+sys.argv[1]+" $1","args":["printf \u0027OUT\\n\\033]133;D;3\\a\u0027"],"timeout":3}))' "$H310")")
+check "#310 普通 run 拿到 Completion" "$R310" '"Completion":"exit"'
+check "#310 并带上了退出码" "$R310" '"Exit-Code":3'
+
+# 2) 没有标记就不许凭空说完成：quiet 不是证据。
+R310b=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"run "+sys.argv[1]+" $1","args":["echo plain310"],"timeout":2}))' "$H310")")
+check_not "#310 没有标记就不报 Completion" "$R310b" '"Completion"'
+
+# 3) 搜索过的 run 与普通 run 一样听得见（两条读路径都接上了）。
+R310c=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"run "+sys.argv[1]+" --grep OUT $1","args":["printf \u0027OUT\\n\\033]133;D;9\\a\u0027"],"timeout":3}))' "$H310")")
+check "#310 --grep 路径也拿到退出码" "$R310c" '"Exit-Code":9'
+
+# 4) 早先命令的标记不算这一次的：窗口从 Input-At 起算。
+R310d=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"run "+sys.argv[1]+" $1","args":["echo later310"],"timeout":2}))' "$H310")")
+check_not "#310 早先的标记不算这一次" "$R310d" '"Completion"'
+
+term "close $H310" >/dev/null
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi

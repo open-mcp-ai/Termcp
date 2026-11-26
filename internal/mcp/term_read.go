@@ -341,6 +341,16 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 	// and callers acted on it by typing the next command into a program that still held
 	// the terminal. Absence now means what it says: not known.
 	watch.headers(&slot)
+	// A SHELL THAT REPORTS ITS OWN COMPLETION IS ASKED EVEN WHEN NOBODY NAMED IT (#310
+	// P3.1). `--until exit` reads the same marker; a caller that has no idea the marker
+	// exists is exactly the caller for whom the precise answer was unavailable, and the
+	// machine that can answer it is the one whose `run` said nothing. Only on a pty (a
+	// pipe's process exit is the stronger fact and is already reported), only when the
+	// caller did not attach a watch (its own predicate is the question it asked), and
+	// only with a marker actually read — absence stays "not known".
+	if watch == nil && sawBytes {
+		s.noteShellCompletion(ctx, stmt, &slot, start, channelEnd)
+	}
 	if watch != nil && !watch.matched && slot.Code < 400 {
 		// A CONTRADICTION IN ONE REPLY: if the shell exited and printed its code (e.g.
 		// Windows ConPTY child exit), saying "this reply says nothing about whether the
