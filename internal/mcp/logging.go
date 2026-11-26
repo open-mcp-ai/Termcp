@@ -27,6 +27,9 @@ func withLogging(name string, h toolHandler, s *Server) toolHandler {
 		//
 		// A nil server means there is nothing to admit against (a logging-only test
 		// harness), so the wrapper passes the call through.
+		// THE PATH SPELLING IS SETTLED BEFORE ANYTHING READS IT (issue #186): the
+		// whitelist, the handler and the log then all see one path. See pathspell.go.
+		adapted := adaptCallPaths(lookupGate(name), request.GetArguments())
 		if s != nil {
 			if bad, held := s.checkAdmission(ctx, name, request); bad != nil || held {
 				if bad != nil {
@@ -43,6 +46,9 @@ func withLogging(name string, h toolHandler, s *Server) toolHandler {
 
 		slog.InfoContext(ctx, "tool call start", baseAttrs...)
 		result, err := h(ctx, request)
+		if len(adapted) > 0 {
+			result = noteAdaptedPaths(result, adapted)
+		}
 		durMs := time.Since(start).Milliseconds()
 
 		exitAttrs := append([]any{}, baseAttrs...)

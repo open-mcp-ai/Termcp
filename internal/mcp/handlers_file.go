@@ -780,9 +780,10 @@ func wireSpellingHint(remotePath string) string {
 	return "\n\nHint: this path is a Windows drive path, and SFTP carries paths in POSIX form, " +
 		"where the absolute spelling is " + "/" + remotePath + ". A server that resolves relative " +
 		"paths against a working directory treats " + remotePath + " as relative and joins it onto " +
-		"that directory — which is why the error above names a doubled path. Use " + "/" + remotePath +
-		" in the request AND in the extension's declared paths, since the whitelist matches the " +
-		"string you pass."
+		"that directory — which is why the error above names a doubled path. Write " + "/" + remotePath +
+		" in the request and in the extension's declared paths, since the whitelist matches the same " +
+		"spelling. (A backslash spelling is adapted automatically and the reply says so via " +
+		"path_adapted; this hint is for the forward-slash form that is still missing its leading slash.)"
 }
 
 // looksLikeWindowsDrivePath reports whether p is a drive path as a caller would type

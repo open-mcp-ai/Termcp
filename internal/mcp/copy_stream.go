@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/open-mcp-ai/termcp/internal/sftp"
 	"io"
 	"strconv"
 	"strings"
@@ -76,6 +77,20 @@ func (s *Server) pipeCopy(ctx context.Context, stmt directive.Statement, _ termA
 				"byte stream. Use `read "+stmt.Target+" "+stmt.Kind+"` on its own to get frames.")}
 	}
 
+	// A PIPELINE DOES NOT GO THROUGH A TOOL CALL, so it would otherwise be the one file
+	// door where a Windows spelling is NOT adapted — the same path working as
+	// `read … file` and failing as `read … file … | write …`. The rule is the same one
+	// (sftp.WireSpelling) and it is applied to both ends here, before either is used.
+	var adapted []string
+	if spelled, ok := sftp.WireSpelling(stmt.Key); ok {
+		adapted = append(adapted, stmt.Key+" -> "+spelled)
+		stmt.Key = spelled
+	}
+	if spelled, ok := sftp.WireSpelling(dst.Key); ok {
+		adapted = append(adapted, dst.Key+" -> "+spelled)
+		dst.Key = spelled
+	}
+
 	src, bad := s.copySource(stmt)
 	if bad != nil {
 		return []envelope.Slot{*bad}
@@ -107,7 +122,8 @@ func (s *Server) pipeCopy(ctx context.Context, stmt directive.Statement, _ termA
 			"Status": "running",
 		},
 		Body: renderTask(v) + "\n" + src.describe() + " -> " + dst.Target + " file " + dst.Key +
-			"\n`get task " + t.ID() + "` waits for it (the wait is the call's `timeout`).",
+			"\n`get task " + t.ID() + "` waits for it (the wait is the call's `timeout`)." +
+			adaptedNote(adapted),
 	}}
 }
 

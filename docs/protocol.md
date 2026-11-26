@@ -94,6 +94,9 @@ Headers provide decision-making metadata for the caller's next step:
 - `Completion: matched|exit|quiet` — present only when the wait ended on concrete evidence: `--until` matched (`matched`), the process or remote shell's OSC 133 marker (`\x1b]133;D;<code>`) reported an exit (`exit`, paired with `Exit-Code`), or a PTY stream stood still for the quiet interval (`quiet`). Absence of `Completion` means the state is unknown, never an assumption.
 - `Exit-Code: <n>` — exit status reported by a pipe process or by the remote shell's OSC 133 completion report.
 
+### Path Spelling
+- `Path-Adapted: <typed> -> <wire>` — the caller's Windows spelling was rewritten to the POSIX form SFTP carries (`C:\tc\a.txt` -> `/C:/tc/a.txt`). Only a drive-prefixed path containing a backslash is rewritten; `\` is an ordinary byte in a POSIX filename, so everything else is passed through exactly as typed, and `./C:\x` remains the way to name such a file on purpose. The same rewrite is applied to the session's `paths` whitelist rules, so a rule written `/C:/tc` admits either spelling. In a JSON reply the same fact appears as `path_adapted`.
+
 ---
 
 ## 4. The 19 Directives

@@ -4,6 +4,13 @@
 
 ### Added
 
+- Drive-prefixed Windows paths written with backslashes (`C:\tc\a.txt`,
+  `/C:\tc\a.txt`) are rewritten to the POSIX wire form (`/C:/tc/a.txt`) before
+  whitelist checks and file operations across `term`, file tools, `read … | write …`
+  pipelines and Web UI remote routes, with `path_adapted` / `Path-Adapted` recording the
+  adaptation. Unprefixed relative paths and `./C:\x` stay untouched so POSIX filenames
+  containing backslashes remain reachable; `help read` / `help write` include `/C:/...`
+  examples.
 - An extension channel declared with a stdio MCP server now works as a peer in `call`
   and `get`: `get <channel> tools [<name>]` prints the live tool table or one schema,
   and `call <channel> <tool> [<json-args>]` performs the `initialize` /

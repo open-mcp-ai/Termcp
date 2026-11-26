@@ -394,6 +394,7 @@ does not know whether its path is a file or a directory does not have to find ou
   read a1f3 file /srv/app                 the entries of one directory
   read a1f3 file /srv/app --depth 2       two levels, cap 5
   read a1f3 file /srv/app --limit 500     more rows, cap 2000
+  read a1f3 file /C:/tc/a.txt             Windows absolute path (POSIX wire form)
 
 --limit (default 200) bounds the rows and --depth (default 1) the levels walked.
 Whatever the caps withheld is COUNTED in the reply, because "nothing is there" and
@@ -1229,14 +1230,28 @@ another read of the file. Files over 16 MiB are refused: exact replace is an edi
 not a copy.
 
 PATHS ARE POSIX ON THE WIRE, ON EVERY PLATFORM. SFTP is a POSIX-shaped protocol, so
-a Windows absolute path has a second spelling: C:/tc/x is /C:/tc/x on the wire, and
-that is what a server recognises as absolute. Written as C:/tc/x it is RELATIVE to
-a server that resolves paths against a working directory, which then joins the two
-and fails with a system error about the file NAME — a sentence that says nothing
-about the spelling, and that arrives after an extension's whitelist has already
-admitted the path. Use /C:/... in the request and in the extension's declared
-paths, which are matched against the same string you pass. help read, docs/api.md
-and this page said nothing about it until issue #186.
+the wire form of a Windows absolute path has a leading slash: /C:/tc/x. That is what
+a server recognises as absolute; written C:/tc/x it is RELATIVE to a server that
+resolves paths against a working directory, which then joins the two and fails with a
+system error about the file NAME — a sentence that says nothing about the spelling.
+
+The preferred spelling is forward slashes with the leading slash:
+  read  a1f3 file /C:/tc/x/a.txt
+  write a1f3 file /C:/tc/x/a.txt --data hi
+  get   a1f3 file /C:/tc/x
+
+BACKSLASHES ARE ACCEPTED TOO, and the reply says when it adapted them: a drive-prefixed
+path containing a backslash is rewritten to the wire form, and the receipt carries
+  path_adapted: C:\tc\x\a.txt -> /C:/tc/x/a.txt
+so the spelling you typed and the one that ran are both on record. Only that shape is
+rewritten, because a backslash is an ordinary byte in a POSIX filename: a relative path
+(dir\file) and anything without a drive prefix is passed through exactly as typed, and
+./C:\x stays the way to name a file that really contains a backslash. A drive's
+whitelist rule is rewritten the same way, so an extension declaring /C:/tc admits either
+spelling.
+
+A RELATIVE path is resolved by the server against its own working directory, not yours,
+and there is no way to ask the wire for the caller's cwd: name the absolute path.
 
 A PIPELINE IS A TRANSFER AND ANSWERS 202 WITH A RECEIPT. Moving a file between nodes
 (including from the daemon host via the internal session) takes as long as the link
