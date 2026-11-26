@@ -85,6 +85,17 @@ var summaryExamples = map[string]string{
 	"write":   `write a1f3:1 file app.log --data "line\n"     # append bytes to a file`,
 	"get":     "get a1f3:1 file app.log --tail 20             # read part of a file",
 	"ls":      "ls                                           # everything this instance holds",
+	// THE REST OF THE VOCABULARY, because an error is exactly where a caller who does not
+	// know the shape ends up (issue #317): a verb with no example sent nothing at all, so
+	// `run --bogus` was told "unknown flag" and left to guess the right line.
+	"rm":     "rm a1f3 --dry-run                            # what would be erased; drop the flag to do it",
+	"create": "create host prod --host 10.0.0.5 --user deploy   # a saved profile",
+	"edit":   "edit host prod --port 2222                    # change one field",
+	"help":   "help run --all                               # the whole page for one verb",
+	"notify": `notify --level warn "deploy needs a key"      # reach the human in the Web UI`,
+	"reader": "reader a1f3:1 --register                      # a cursor from now, no replay",
+	"resize": "resize a1f3:1 --rows 40 --cols 120             # a pty follows the size",
+	"span":   "span a1f3:1 --from 120 --to 480               # bytes between two cursors",
 }
 
 // SummaryExample returns the worked example for a verb, if it has one.
