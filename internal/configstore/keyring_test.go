@@ -32,7 +32,7 @@ func TestKeyringSealsTheMnemonicNotTheMainKey(t *testing.T) {
 	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
 	storeID := testStoreID()
 	phrase := testPhrase(t)
-	data, keyring, err := CreateKeyring(storeID, phrase, "", NewEnvProvider(""))
+	data, keyring, err := CreateKeyring(storeID, phrase, "", "test-key", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestMainKeyIsDerivedFromTheMnemonicAndTheStore(t *testing.T) {
 
 func TestKeyringWrongEnvironmentKEKDoesNotRevealAuthenticationOracle(t *testing.T) {
 	t.Setenv(EnvKEKVariable, environmentKEK(0x61))
-	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", NewEnvProvider(""))
+	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", "test-key", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestKeyringWrongEnvironmentKEKDoesNotRevealAuthenticationOracle(t *testing.
  */
 func TestKeychainFileRecordedPluggedState(t *testing.T) {
 	t.Setenv(EnvKEKVariable, environmentKEK(0x63))
-	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", NewEnvProvider(""))
+	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", "test-key", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func onlyKeyID(t *testing.T, keyring *Keyring) ID {
 
 func TestKeyringFileRejectsUnknownFieldsDuplicateSlotsAndTampering(t *testing.T) {
 	t.Setenv(EnvKEKVariable, environmentKEK(0x64))
-	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", NewEnvProvider(""))
+	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", "test-key", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +256,7 @@ func TestKeyringFileRejectsUnknownFieldsDuplicateSlotsAndTampering(t *testing.T)
  */
 func TestKeyringSlotCannotBeMovedToAnotherKey(t *testing.T) {
 	t.Setenv(EnvKEKVariable, environmentKEK(0x65))
-	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", NewEnvProvider(""), NewEnvProvider(""))
+	data, keyring, err := CreateKeyring(testStoreID(), testPhrase(t), "", "test-key", NewEnvProvider(""), NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,7 +298,7 @@ func TestKeyringSlotCannotBeMovedToAnotherKey(t *testing.T) {
 func TestKeyringFileHoldsNoKeyMaterial(t *testing.T) {
 	t.Setenv(EnvKEKVariable, environmentKEK(0x66))
 	phrase := testPhrase(t)
-	raw, keyring, err := CreateKeyring(testStoreID(), phrase, "", NewEnvProvider(""))
+	raw, keyring, err := CreateKeyring(testStoreID(), phrase, "", "test-key", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +324,7 @@ func TestKeyringFileHoldsNoKeyMaterial(t *testing.T) {
 func TestConcurrentSealAndDestroyRacesSafely(t *testing.T) {
 	t.Setenv(EnvKEKVariable, environmentKEK(0x67))
 	storeID := testStoreID()
-	_, keyring, err := CreateKeyring(storeID, testPhrase(t), "", NewEnvProvider(""))
+	_, keyring, err := CreateKeyring(storeID, testPhrase(t), "", "test-key", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}

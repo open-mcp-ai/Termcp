@@ -36,7 +36,7 @@ func TestAProviderOnlyOpensTheSlotsItSealed(t *testing.T) {
 	}
 
 	secondKeyFile := writeKeyFile(t, 0xa2)
-	second, err := repo.CreateKey(testPhrase(t), "", NewFileProvider(secondKeyFile))
+	second, err := repo.CreateKeyWithLabel(testPhrase(t), "", "second", NewFileProvider(secondKeyFile))
 	if err != nil {
 		t.Fatalf("create second key: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestHostsSealedByOneKeyStayShutForAnother(t *testing.T) {
 	if err := aID.UnmarshalText([]byte(keys[0].ID)); err != nil {
 		t.Fatal(err)
 	}
-	b, err := repo.CreateKey(testPhrase(t), "", NewEnvProvider(""))
+	b, err := repo.CreateKeyWithLabel(testPhrase(t), "", "b", NewEnvProvider(""))
 	if err != nil {
 		t.Fatal(err)
 	}

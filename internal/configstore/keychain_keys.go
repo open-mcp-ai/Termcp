@@ -115,6 +115,14 @@ func (r *Repository) Keys() ([]KeyInfo, error) {
 // the UI then prints the short id instead of inventing a name.
 func NormalizeKeyLabel(label string) (string, error) {
 	trimmed := strings.TrimSpace(label)
+	/* EVERY KEY HAS A NAME. An empty one used to be legal, and the panel rendered it
+	   as the key's short id or as "unnamed" — a row you cannot tell apart from the
+	   next one, in a list whose whole job is telling keys apart. The rule lives here,
+	   at the store, so every entrance agrees: the panel form, the REST route, an
+	   agent's tool call. */
+	if trimmed == "" {
+		return "", fmt.Errorf("%w: a key needs a name", ErrInvalidLabel)
+	}
 	if len(trimmed) > maxKeyLabelLength {
 		return "", fmt.Errorf("%w: a key name is at most %d characters", ErrInvalidLabel, maxKeyLabelLength)
 	}
@@ -132,6 +140,14 @@ func NormalizeKeyLabel(label string) (string, error) {
 // maxKeyLabelLength bounds a label so a row cannot be pushed off the panel.
 const maxKeyLabelLength = 64
 
+/* DefaultKeyLabel names the key a store is born with.
+ *
+ * Initialization has no human to ask — it happens when encryption is switched on
+ * before any key exists, and in tests — and a key still needs a name (see
+ * NormalizeKeyLabel). This is that name: ordinary, renameable, and never a
+ * placeholder the panel has to special-case. */
+const DefaultKeyLabel = "default"
+
 // CreateKey derives a new key from mnemonic and adds it to the keychain, sealed
 // by the supplied providers. It does not take the index over: adding a key says
 // nothing about which object should be re-sealed.
@@ -139,10 +155,9 @@ func (r *Repository) CreateKey(mnemonic, passphrase string, providers ...Provide
 	return r.CreateKeyWithLabel(mnemonic, passphrase, "", providers...)
 }
 
-// CreateKeyWithLabel is CreateKey with a name for the key. The name is a separate
-// entry point rather than a parameter on CreateKey because most callers — tests,
-// importers, recovery paths — have no opinion about it, and an empty name is a
-// legal state the panel renders as the short id.
+// CreateKeyWithLabel is CreateKey with a name for the key. The name is required:
+// an unnamed key is a row nobody can identify, and the panel's list is exactly the
+// place where that matters (see NormalizeKeyLabel).
 func (r *Repository) CreateKeyWithLabel(mnemonic, passphrase, label string, providers ...Provider) (KeyInfo, error) {
 	defer r.acquireWrite()()
 	/* Two different faults share one field, and only one of them may be replaced.

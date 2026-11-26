@@ -438,6 +438,11 @@ func statusAndCodeForKeychainError(err error) (int, string, string) {
 		return http.StatusConflict, "key_locked", "Load the key that seals this host first."
 	case errors.Is(err, configstore.ErrMnemonicInvalid):
 		return http.StatusBadRequest, "key_mnemonic_invalid", "That is not a valid recovery phrase."
+	case errors.Is(err, configstore.ErrInvalidLabel):
+		/* A name the caller has to fix, so 400 and not 500: an empty one used to be
+		   accepted and is now the store's rule, and the person sees the sentence
+		   rather than a status code. */
+		return http.StatusBadRequest, "key_label_invalid", "A key needs a name (at most 64 characters, no control characters)."
 	case errors.Is(err, configstore.ErrPassphraseWrong):
 		return http.StatusBadRequest, "passphrase_incorrect", "That passphrase is not the one this key's hosts were sealed with."
 	case errors.Is(err, configstore.ErrPassphraseRequired):

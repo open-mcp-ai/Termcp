@@ -1,6 +1,13 @@
 # Changelog
 
 ## Unreleased
+- **A key must have a name.** An empty label used to be legal and the list rendered
+  it as the key's short hash — a row whose only distinguishing feature was a
+  hexadecimal prefix, in a list whose whole job is telling keys apart. Create and
+  rename now answer `400 key_label_invalid` for an empty or whitespace-only name, and
+  a nameless key cannot be created by the panel, the REST route or an agent. The one
+  key that is named without being asked is the one a store is born with, which is
+  called `default` and renames like any other.
 - **The instance serves before it finishes reading yesterday.** Restoring the session
   registry — one manifest read and one fsync per archived session — used to run while
   constructing the server, so a data dir with a few dozen sessions kept the port

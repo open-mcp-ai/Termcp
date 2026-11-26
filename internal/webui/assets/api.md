@@ -391,6 +391,8 @@ GET    /api/keychain                        → {"keys":[…]}
 POST   /api/keychain                        {"label":"…"}                     add a key, phrase generated
                                             {"secret":"word word …"}          adopt written-down words
                                             {"passphrase":"…"}                mark the key as one whose hosts need it
+                                            `label` is REQUIRED; without one the
+                                            request is 400 key_label_invalid
 DELETE /api/keychain/{id}                   {"backup_confirmed":true}         delete a key
 POST   /api/keychain/{id}/plug              load it (unseal the words into memory)
 POST   /api/keychain/{id}/unplug            remove it
@@ -442,11 +444,14 @@ are plaintext. A key still sealing hosts is refused (`409 key_in_use`), because
 deleting it would make those profiles unreadable forever.
 
 A generated phrase is returned **once**, in the response body as `"mnemonic"`.
-A key has a **name**. It is stored in clear beside the plugged bit — the keychain
-file has to be readable while nothing is loaded, so you can tell the keys apart
-before any of them is in memory — which also means a name is not a secret. The API
-takes one on create and on rename, and an empty one is legal: the panel then prints
-the short id rather than inventing a name.
+A key has a **name**, and a name is **required**. It is stored in clear beside the
+plugged bit — the keychain file has to be readable while nothing is loaded, so you
+can tell the keys apart before any of them is in memory — which also means a name is
+not a secret. Create and rename both take one, and an empty or whitespace-only one
+is `400 key_label_invalid`: a nameless row is one you cannot tell from the next one,
+in a list whose whole job is telling keys apart. The only key that gets a name
+without being asked is the one a store is born with, which is called `default` and
+can be renamed like any other.
 
 `POST /api/keychain/{id}/passphrase` changes a key's second layer and nothing else:
 same 24 words, same id, same sharing address. It is not a field edit — a host's body

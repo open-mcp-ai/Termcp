@@ -250,11 +250,18 @@ func (s *Store) EncryptionStatus() (EncryptionStatus, error) {
 // "generate one and return it once". passphrase, when non-empty, marks the key so
 // its hosts need that passphrase to activate — the phrase itself is never stored.
 func (s *Store) CreateKey(secret, passphrase string, providers ...configstore.Provider) (configstore.KeyInfo, string, error) {
-	return s.CreateKeyWithLabel(secret, passphrase, "", providers...)
+	/* A key made without a human in the loop still needs a name; see
+	   configstore.DefaultKeyLabel. The named entry point is what the panel and the
+	   REST route use, and it takes the caller's word. */
+	return s.CreateKeyWithLabel(secret, passphrase, configstore.DefaultKeyLabel, providers...)
 }
 
-// CreateKeyWithLabel is CreateKey with a human name for the new key.
+// CreateKeyWithLabel is CreateKey with a human name for the new key. The name is
+// required: an unnamed key is a row nobody can tell from the next one.
 func (s *Store) CreateKeyWithLabel(secret, passphrase, label string, providers ...configstore.Provider) (configstore.KeyInfo, string, error) {
+	if _, err := configstore.NormalizeKeyLabel(label); err != nil {
+		return configstore.KeyInfo{}, "", err
+	}
 	generated := ""
 	mnemonic := secret
 	if strings.TrimSpace(mnemonic) == "" {
@@ -291,11 +298,11 @@ func (s *Store) CreateKeyWithLabel(secret, passphrase, label string, providers .
 		if err != nil {
 			return configstore.KeyInfo{}, generated, err
 		}
-		/* InitializeRepositoryWithMnemonic has no name to give the key it creates:
-		   the name is a later decision about an object that already exists. Naming
-		   it here keeps "create with a name" one outcome instead of "created, then
-		   maybe named". */
-		if label != "" {
+		/* InitializeRepositoryWithMnemonic names the key it creates after
+		   configstore.DefaultKeyLabel, and the caller's name is applied here: the
+		   keychain is created around a key, so "created, then named" is the shape
+		   whether the person asked for it or not. */
+		if label != configstore.DefaultKeyLabel {
 			if err := created.SetKeyLabel(mustKeyID(info.ID), label); err != nil {
 				return configstore.KeyInfo{}, generated, err
 			}
