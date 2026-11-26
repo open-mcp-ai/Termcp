@@ -32,16 +32,38 @@ import (
 // A stdio peer is just a line-oriented pipe: `run` writes the frame, `read` gets the
 // reply. That is the whole implementation, and it is why an MCP server needs no
 // registration ceremony — `pipe --argv` starts it, and this types at it.
+// channelStateKey maps any spelling of a live channel (`sid:1`, `name:1`, short prefix,
+// or the shell's own id) to the child shell's immutable id, so cursor/reader/pending
+// state stays unified across callers and between tool-name wrappers and raw frames.
+func (s *Server) channelStateKey(handle string) string {
+	if cs, bad := s.requireShell(handle); bad == nil && cs != nil {
+		return cs.ID
+	}
+	return handle
+}
+
 func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub string, handle string, rest []string, win termArgs) envelope.Slot {
 	headers := map[string]string{"Path": stmt.Path}
+	stateKey := s.channelStateKey(handle)
 	switch sub {
 	case "tools", "send", "call":
+		rawPayload := strings.TrimSpace(strings.Join(rest, " "))
+		// A PIPE-MODE MCP EXTENSION IS A REAL MCP PEER (issue #316). An unmanaged pipe
+		// stays raw-frame only (#271), because anything could be running on it; an
+		// extension channel whose template declared a stdio MCP server accepts
+		// `call <channel> <tool> [<json-args>]` just like the HTTP form accepts
+		// `call <session> mcp:<n> <tool> [<json-args>]`.
+		if (sub == "call" || sub == "send") && rawPayload != "" &&
+			!strings.HasPrefix(unquoteWord(rawPayload), "{") &&
+			s.stdioMCPChannel(handle) != "" {
+			return s.extStdioToolCall(ctx, stmt, handle, rawPayload, win, sub == "send" || boolFlag(stmt, "send"))
+		}
 		var frame string
 		switch sub {
 		case "tools":
 			frame = `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
 		default:
-			payload := unquoteWord(strings.TrimSpace(strings.Join(rest, " ")))
+			payload := unquoteWord(rawPayload)
 			if payload == "" {
 				return badRequest(stmt, "mcp "+sub+" needs a JSON-RPC frame")
 			}
@@ -57,12 +79,21 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 			}
 			frame = payload
 		}
-		// One frame, one line: the peer reads line-delimited JSON-RPC.
-		if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", handle, "text", frame)); fail != nil {
-			return s.slotFromFailure(ctx, stmt, fail)
+		// One frame, one line, under the channel's line lock so a bare frame and the
+		// tool-name wrapper cannot interleave on the same process (#212).
+		lock := s.lineLock(stateKey)
+		lock.Lock()
+		_, failIn := s.callTool(ctx, "shell_input", argsOf("shell_id", handle, "text", frame))
+		var failKey *toolFailure
+		if failIn == nil {
+			_, failKey = s.callTool(ctx, "shell_key", argsOf("shell_id", handle, "key", "enter"))
 		}
-		if _, fail := s.callTool(ctx, "shell_key", argsOf("shell_id", handle, "key", "enter")); fail != nil {
-			return s.slotFromFailure(ctx, stmt, fail)
+		lock.Unlock()
+		if failIn != nil {
+			return s.slotFromFailure(ctx, stmt, failIn)
+		}
+		if failKey != nil {
+			return s.slotFromFailure(ctx, stmt, failKey)
 		}
 		// `call` WAITS FOR THE REPLY IT CAUSED; `send` DOES NOT.
 		//
@@ -85,17 +116,19 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 			return envelope.Slot{Code: 202, Headers: headers, Body: "sent; read the reply with `read " + handle + " --frame`"}
 		}
 		if id := frameID(frame); id != "" {
-			return s.mcpAwaitReply(ctx, stmt, handle, id, win, headers)
+			return s.mcpAwaitReply(ctx, stmt, stateKey, id, win, headers)
 		}
 		// A notification has no answer to wait for, so waiting would be a lie.
 		return envelope.Slot{Code: 202, Headers: headers, Body: "sent (a notification has no reply); read frames with `read " + handle + " --frame`"}
 	case "recv":
-		return s.mcpRecvFrame(ctx, stmt, handle, win)
+		return s.mcpRecvFrame(ctx, stmt, stateKey, win)
 	case "close":
 		// The cursor has to go with the handle: handles are minted monotonically
 		// (jrpcHandleSeq), so a reopened channel never reuses this key and the map
 		// would grow by one entry per channel the process ever opened.
+		s.dropRecvCursor(stateKey)
 		s.dropRecvCursor(handle)
+		s.stdioPeers.Delete(stateKey)
 		return envelope.Slot{Code: 204, Headers: headers}
 	}
 	return badRequest(stmt, "unknown mcp subcommand: "+sub)

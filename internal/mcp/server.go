@@ -141,6 +141,16 @@ type Server struct {
 	// must not hold it, or a run would park every later command on the channel.
 	lineTokens sync.Map // handle string -> chan struct{}
 
+	// stdioPeers is the MCP client state of each extension channel that runs a stdio
+	// MCP server (issue #316): the one-shot handshake and the id counter.
+	//
+	// KEYED BY THE CHILD SHELL ID, never by the spelling a caller typed: `sid:1`, the
+	// session's `--name:1` and the shell's own id name one channel, and a second state
+	// for it would be a second handshake against a server that has one session. The id
+	// is never reused (a new channel gets a new id), so an entry cannot survive its
+	// channel by accident; `close` drops it anyway.
+	stdioPeers sync.Map // child shell id -> *stdioPeer
+
 	// closedReads is where each CLOSED channel's plain `read` has read up to (#188).
 	//
 	// A live channel's position lives in its ring-buffer reader, which is the only

@@ -1085,10 +1085,19 @@ const getDetail = `Describe one node: a session, one of its channels, or a peer.
   get a1f3 cdp:1 protocol Page   one domain's commands and their parameters
   get a1f3 mcp:1 tools        list tools offered by a mounted MCP peer
   get a1f3 mcp:1 tools search inspect input schema for one tool
+  get a1f3:2 tools          list tools offered by an extension's stdio MCP channel
+  get a1f3:2 tools search   inspect input schema for one tool there
   get task task_9f2c11ab    one background transfer, waiting up to the window
   get use:<host> file /p   metadata for one path on a host, no session needed
 
 For the list of what exists, use ls.
+
+"tools" MEANS THE SAME THING ON BOTH KINDS OF MCP ADDRESS. A mounted peer answers it
+(get a1f3 mcp:1 tools); so does an extension channel whose template declares a stdio
+MCP server (get a1f3:2 tools) — the reconciler owns that channel and the template says
+what runs on it, so the table exists rather than being guessed. On any other channel the
+word is not an address this layer answers, and the reply is the ordinary channel
+description: that channel is a byte pipe, and a pipe has no tool table.
 
 A HOST CAN BE THE TARGET, with 'get use:<host> file <path>' (or the bare profile
 name). That reads the path's metadata over the host's pooled transport; the reply
@@ -1113,6 +1122,12 @@ HOW IT WORKS:
 Peers speak different protocols; call routes by the peer's kind:
 - MCP peer (open <session> mcp <url>): a live tool provider. Passing a tool name
   calls that tool directly and unpacks its text result.
+- An extension's stdio MCP channel (ls ext, then open ext <name>): also a real MCP
+  server, reached over a pipe instead of a socket. The reconciler owns the channel and
+  the template declares that the process speaks MCP, so the same tool form works and
+  the handshake (initialize + notifications/initialized) happens once, by itself. A
+  plain open channel is a byte pipe with no such declaration: it takes raw frames
+  only, because anything at all may be running on it.
 - CDP peer (open <session> cdp <ws-url>): Chrome DevTools Protocol. Accepts
   methods directly (e.g. Page.navigate).
 - JRPC peer (open <session> jrpc <ws-url>): raw JSON-RPC envelope.
@@ -1122,6 +1137,7 @@ STANDARD USAGE:
   get  internal mcp:1 tools                 list available tools on this peer
   get  internal mcp:1 tools search          show one tool's input schema
   call internal mcp:1 search {"query":"error"}  invoke a tool and get its text (args optional)
+  call a1f3:2 search {"query":"error"}      the same on an extension's stdio MCP channel
 
   The :1 is the connection number, and it is part of the address: "mcp" alone works
   only while the session has exactly one MCP peer, and stops working the moment a
@@ -1562,14 +1578,17 @@ so address terminal work by shell_id. Closing the shared session ends every
 extension on that connection. A dead extension restarts on its own, and the LATEST
 listing carries its new handle.
 
-A template that declares --command: the handle is the SHELL running the server.
-Drive it the way any channel is driven — call <handle> <frame> to write one and wait
-for its reply, or read <handle> --frame to take the next frame off the stream.
-Frames can arrive in pieces — a result with partial_tail_bytes > 0 is an unfinished
-frame, and a partial object has not delivered its fields yet. A frame is a JSON-RPC
-message (object with id or method, or an array); other server output is reported as
-text. Server logs come on stderr; --stream e reads that separate stream. Handshake:
-initialize, then notifications/initialized, then tools/list.
+A template that declares --command: the handle is the SHELL running the server, and
+termcp drives it as a real MCP peer — the handshake (initialize, then
+notifications/initialized) happens once, by itself, on the first call.
+  get  <handle> tools          list the tools the server offers
+  get  <handle> tools <name>   one tool's full input schema
+  call <handle> <tool> {args}  call it; the reply is the tool's own text, --json the frame
+The raw form is still there: call <handle> <frame> writes one line and waits for its
+reply, and read <handle> --frame takes the next frame off the stream. Frames can
+arrive in pieces — a result with partial_tail_bytes > 0 is an unfinished frame, and a
+partial object has not delivered its fields yet. Server logs come on stderr;
+--stream e reads that separate stream.
 
 A template that declares --paths: a read-only window onto remote files. It has NO
 shell, so drive it over SFTP against the session_id — and only inside the

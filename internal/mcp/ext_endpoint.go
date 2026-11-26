@@ -138,7 +138,7 @@ func extFrameKind(frame string) (string, bool) {
 // interleaving there produce a line no reader can parse (#212). The lock is released before
 // any wait: holding it across a reply would serialise every client behind the slowest peer.
 func (s *Server) extWriteLine(ctx context.Context, shellID, frame string) error {
-	tok := s.lineToken(shellID)
+	tok := s.lineToken(s.channelStateKey(shellID))
 	select {
 	case <-tok:
 	case <-ctx.Done():
