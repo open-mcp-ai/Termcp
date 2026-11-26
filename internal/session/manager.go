@@ -701,3 +701,60 @@ func backfillShellIndexes(shells []api.Session) {
 		shells[i].Index = i + 1
 	}
 }
+
+// Resolve turns whatever a caller wrote for a session into the session it names
+// (issue #320): the full id, the display name it was created with, or an id prefix that
+// matches exactly one session.
+//
+// IT LIVES HERE, NOT IN THE CALLER, because three entrances need the same three rules:
+// the tool handlers, the transcript reader (`run web:1`), and the listing (`ls web`).
+// Each had learned a different subset — `read web:1` worked, `run web:1` answered
+// `session "web" not found`, `ls web` listed nothing — and a spelling that works in one
+// verb and not the next is indistinguishable from a session that disappeared.
+//
+// The answers are (session, nil) for one match, (nil, nil) for none, and
+// (nil, candidates) for several: the caller has its own sentence for "not found", and an
+// ambiguous prefix is the caller's chance to list the choices.
+func (m *Manager) Resolve(ref string) (*Session, []*Session) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, nil
+	}
+	if sess := m.Get(ref); sess != nil {
+		return sess, nil
+	}
+	// BY NAME BEFORE BY PREFIX: a name is a word the caller chose, and it should not lose
+	// to an id that happens to start with the same characters.
+	if named := m.SessionsNamed(ref); len(named) == 1 {
+		return named[0], nil
+	} else if len(named) > 1 {
+		return nil, named
+	}
+	if len(ref) < minRefPrefix || len(ref) >= idLength {
+		return nil, nil
+	}
+	var matches []*Session
+	m.sessions.Range(func(_, v any) bool {
+		sess := v.(*Session)
+		if strings.HasPrefix(sess.ID, ref) {
+			matches = append(matches, sess)
+		}
+		return true
+	})
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches[0], nil
+	}
+	return nil, matches
+}
+
+const (
+	// minRefPrefix is the shortest id prefix that resolves. Four characters name ~17 bits
+	// of an id: long enough that a reader copying from a narrow `ps` column or a log line
+	// means one session, short enough to be worth typing.
+	minRefPrefix = 4
+	// idLength is how long a full id is; a string that long is not a prefix.
+	idLength = 12
+)

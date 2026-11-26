@@ -149,6 +149,12 @@ func (s *Server) lsTargetNames(target string) bool {
 			return true
 		}
 	}
+	// `ls web` NAMES A SESSION TOO (issue #320): the listing already narrowed by id and by
+	// profile name, and a session's own --name was the one spelling it refused — the same
+	// name `read web:1` had just accepted.
+	if sess, err := s.resolveSessionRef(target); sess != nil && err == nil {
+		return true
+	}
 	return false
 }
 

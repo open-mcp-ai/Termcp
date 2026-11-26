@@ -38,10 +38,23 @@ func (s *Server) directivePS(ctx context.Context, stmt directive.Statement, win 
 	// stay identical: two listings of the same tree that disagree are worse than one
 	// that needs a flag.
 	if only, ok := stmt.Flag("only-session"); ok && only != "" {
+		// THE FILTER ACCEPTS EVERY SPELLING THE CALLER CAN WRITE (issue #320): an id, the
+		// profile name, and a session's own --name. It matched only the first two, so
+		// `ls web` passed the "does this name something" check and then listed nothing —
+		// an empty answer about a session that was running.
 		narrowed := sessions[:0]
 		for _, sess := range sessions {
-			if sess.ID == only || sess.SSHConfig == only {
+			if sess.ID == only || sess.SSHConfig == only || sess.Name == only {
 				narrowed = append(narrowed, sess)
+			}
+		}
+		if len(narrowed) == 0 {
+			if resolved, _ := s.sessMgr.Resolve(only); resolved != nil {
+				for _, sess := range sessions {
+					if sess.ID == resolved.ID {
+						narrowed = append(narrowed, sess)
+					}
+				}
 			}
 		}
 		sessions = narrowed
