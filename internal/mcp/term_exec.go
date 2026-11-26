@@ -111,7 +111,32 @@ func (s *Server) runStatements(ctx context.Context, stmts []directive.Statement,
 	)
 	reply := t.Run(ctx, &term.File{Statements: stmts})
 	out.slots = reply.Slots
+	// A SECRET IS NOT ECHOED BACK BY US (issue #357 §1.3). Every reply carries the
+	// statement's own text in `Path:`, and a value that came from `secrets` was expanded
+	// into it — so the caller's credential came back in the reply, and from there into
+	// whatever reads that reply (a transcript, a log of the conversation, the model's own
+	// context). The dry-run path already replaced those values with `$NAME`; this is the
+	// same masking applied to the replies that actually ran.
+	//
+	// THE STATEMENT ITSELF KEEPS THE REAL BYTES: masking happens here, on the copy the
+	// caller reads, after dispatch. `$NAME` is also the spelling the caller can send
+	// again with the same secrets, so the Path stays copyable.
+	maskSecretsInSlots(out.slots, win.Secrets)
 	return out
+}
+
+// maskSecretsInSlots replaces secret values with their reference in everything a reply
+// echoes back. The headers are the surface: `Path` carries the whole statement, and a
+// refusal may quote part of it.
+func maskSecretsInSlots(slots []envelope.Slot, secrets map[string]string) {
+	if len(secrets) == 0 {
+		return
+	}
+	for i := range slots {
+		for k, v := range slots[i].Headers {
+			slots[i].Headers[k] = maskSecrets(v, secrets)
+		}
+	}
 }
 
 // controlByteInShell reports the first raw control byte sitting in a region the
