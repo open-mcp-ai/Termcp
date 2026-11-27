@@ -193,7 +193,6 @@ _configStorageRoot.innerHTML = [
   '<div class="modal" style="max-width:420px"><div class="modal-h"><h2 id="secret-title"></h2>',
   '<button type="button" id="secret-x" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M2 2l8 8M10 2L2 10"/></svg></button>',
   '</div><div class="modal-body">',
-  '<p class="conn-field-hint" id="secret-message"></p>',
   '<div class="conn-field"><label for="secret-input" id="secret-label" data-i18n="storage.keyPassLabel">Passphrase</label>',
   '<input type="password" id="secret-input" maxlength="256" spellcheck="false" autocomplete="new-password"></div>',
   /* Shown only when the caller asks for two answers — changing a passphrase needs the
@@ -1042,7 +1041,6 @@ function syncConfigStorageActions() {
 function configStoragePromptSecret(opts) {
   opts = opts || {};
   document.getElementById('secret-title').textContent = opts.title || '';
-  document.getElementById('secret-message').textContent = opts.message || '';
   document.getElementById('secret-ok').textContent = opts.okText || t('common.done');
   var input = document.getElementById('secret-input');
   input.value = '';
@@ -1180,8 +1178,10 @@ function configStorageConvert(action, names, options) {
       var ask = key && key.passphrase
         ? configStoragePromptSecret({
             title: t('storage.encryptPassTitle'),
-            message: t('storage.encryptPassMessage'),
-            okText: t('storage.encryptTitle')
+            /* The button says what the press will do, and a press on one card is not a
+               selection: "lock selected hosts" was the batch sentence on a dialog opened
+               for one host. */
+            okText: (options && options.title) || t('storage.encryptTitle')
           })
         : Promise.resolve('');
       return ask.then(function (passphrase) {

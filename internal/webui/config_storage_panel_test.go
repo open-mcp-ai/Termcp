@@ -2,6 +2,7 @@ package webui
 
 import (
 	"io/fs"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -89,6 +90,56 @@ func TestKeychainPanelHasNoLockVocabulary(t *testing.T) {
 			for _, banned := range []string{"密码", "上锁", "绑定本机"} {
 				if strings.Contains(value, banned) {
 					t.Fatalf("%s/%s says %q: %q", lang, key, banned, value)
+				}
+			}
+		}
+	}
+}
+
+/* A hint never pulls itself up.
+ *
+ * `.conn-field-hint` carried `margin: -8px 0 8px`, which only looked right in one
+ * position: directly under an input, whose own bottom margin is 12px, so the caption
+ * landed 4px below it. In every other position the -8px subtracted from whatever
+ * container the hint was in — a dialog whose first line was a hint had its own top
+ * padding cancelled, and "the padding is missing" was reported twice for that reason.
+ * The rule is now 0 above and 8px below, and this test is what keeps a negative pull
+ * off any class whose job is to caption something.
+ *
+ * Mutation check: restore `margin: -8px 0 8px` on `.conn-field-hint` and this fails
+ * by name.
+ */
+func TestNoHintPullsItselfUp(t *testing.T) {
+	files, err := fs.Glob(Assets(), "static/css/*.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range files {
+		name := filepath.Base(path)
+		css := readAssetLF(t, "static/css/"+name)
+		for _, block := range strings.Split(css, "}") {
+			open := strings.Index(block, "{")
+			if open < 0 {
+				continue
+			}
+			// Only the selector line itself: a rule may carry a comment above it.
+			lines := strings.Split(block[:open], "\n")
+			selector := strings.TrimSpace(lines[len(lines)-1])
+			if !strings.Contains(strings.ToLower(selector), "hint") {
+				continue
+			}
+			for _, decl := range strings.Split(block[open+1:], ";") {
+				decl = strings.TrimSpace(decl)
+				if !strings.HasPrefix(decl, "margin") {
+					continue
+				}
+				// The VALUE only: the hyphen inside `margin-top` is not a negative.
+				value := decl
+				if colon := strings.Index(value, ":"); colon >= 0 {
+					value = value[colon+1:]
+				}
+				if strings.Contains(value, "-") {
+					t.Errorf("%s: %q on %q pulls the hint into the block above it", name, decl, selector)
 				}
 			}
 		}

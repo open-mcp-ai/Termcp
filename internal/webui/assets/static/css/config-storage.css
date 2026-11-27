@@ -8,9 +8,9 @@
  * Two rules of the house apply inside a dialog and are easy to forget:
  *   - `.modal-body input` (base.css) gives every input width:100% and text-field
  *     padding. A checkbox is an input, so the list's ticks undo exactly that.
- *   - `.conn-field-hint` (base.css) is a NEGATIVE-margin hint meant to sit under
- *     an input. Used as a standalone sentence it eats the block above it, so
- *     standalone notes get their own margin here.
+ *   - `.conn-field-hint` (base.css) is a caption: 8px below itself, and the field
+ *     above keeps its own margin. It used to pull itself up by 8px, which only
+ *     worked directly under an input and ate the padding of any other container.
  */
 
 /* ---- the panel ----------------------------------------------------------- */
@@ -268,7 +268,6 @@
 .cs-fact-line { margin: 10px 0 0; font-size: 12px; opacity: .7; }
 .cs-fact-line:empty { display: none; }
 .cs-form-block { margin: 14px 0 0; }
-.cs-form-block .conn-field-hint { margin: 0 0 8px; line-height: 1.5; }
 .cs-form-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
 .cs-form-actions .btn { padding: 3px 11px; font-size: 12px; }
 .cs-detail-spacer { flex: 1 1 auto; }
@@ -296,7 +295,10 @@
 
 /* The address is a string people copy: one target, monospace, wrapping rather
    than truncating — half an address is not an address. */
+/* The box and its caption are two things: 6px is what keeps the dashed border from
+   touching the first line of the sentence that explains it (measured at 0). */
 .cs-pub {
+  margin: 0 0 6px;
   padding: 8px 10px; border-radius: 6px;
   border: 1px dashed var(--border-strong);
   background: var(--bg-input);
