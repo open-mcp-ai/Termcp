@@ -28,14 +28,6 @@ import (
 func (s *Server) directivePS(ctx context.Context, stmt directive.Statement, win termArgs) envelope.Slot {
 	headers := map[string]string{"Path": stmt.Path}
 
-	// THE MIDDLE STATE (issue #353): up and answering, archive still loading. Both the
-	// header and the empty-list sentence carry it, because that sentence is exactly where
-	// a caller would otherwise conclude the history disappeared.
-	if s.sessMgr != nil {
-		if restoring, done, total := s.sessMgr.RestoreStatus(); restoring {
-			headers["Restoring"] = fmt.Sprintf("%d/%d", done, total)
-		}
-	}
 	sessions := s.sessMgr.ListAll()
 	callerNS := callerNamespace(ctx)
 	if !boolFlag(stmt, "all") {
@@ -150,15 +142,7 @@ func (s *Server) directivePS(ctx context.Context, stmt directive.Statement, win 
 		// caller's first move was `ls`, it said only "nothing is running", and
 		// `ls host` -- the one command that answers "what could I connect to" -- was a
 		// guess it had to make from the guide (issue #161, P2-5).
-		// AND AN EMPTY LIST DURING A RESTORE IS NOT AN EMPTY ARCHIVE (issue #353): the
-		// instance is answering while it reads history, so the sentence names the state
-		// instead of letting a caller conclude the sessions are gone.
-		if r := headers["Restoring"]; r != "" {
-			body = "(nothing is running yet — the archive is still being restored, " + r +
-				" loaded; new connections work now)\n`ls host` shows the saved targets; `connect <host>` opens one.\n"
-		} else {
-			body = "(nothing is running)\n`ls host` shows the saved targets; `connect <host>` opens one.\n"
-		}
+		body = "(nothing is running)\n`ls host` shows the saved targets; `connect <host>` opens one.\n"
 	}
 	// PS IS THE STATE, SO ITS learn_mode TEACHES THE STATE VERBS.
 	//

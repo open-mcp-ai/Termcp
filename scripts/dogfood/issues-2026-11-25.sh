@@ -924,46 +924,6 @@ term "close $H357" >/dev/null
 rm -rf "$D357"
 
 # ---------------------------------------------------------------------------
-# #353 后台异步恢复归档：重启后立刻应答、历史随后到位
-echo
-echo "== #353 异步归档恢复"
-D353=/tmp/dg-353-$$
-mkdir -p "$D353/sessions"
-for i in $(seq 1 25); do
-  id=$(printf 'arch%08d' "$i")
-  mkdir -p "$D353/sessions/$id"
-  printf '{"id":"%s","status":"exited","created_at":1700000000000}
-' "$id" > "$D353/sessions/$id/manifest.json"
-done
-P353=18857
-"$BIN" --data-dir "$D353" --port "$P353" --log-level info > "$D353/boot.log" 2>&1 &
-PID353=$!
-# 端口必须在 2s 内就绪（改前随着会话数线性拉长，且恢复完成前不监听）
-up353=""
-for i in $(seq 1 200); do
-  if curl -sf --max-time 1 "http://127.0.0.1:$P353/api/daemon" > "$D353/daemon.json" 2>/dev/null; then
-    up353=1
-    break
-  fi
-  sleep 0.02
-done
-check "#353 端口带着 25 个归档会话快速就绪" "$up353" "1"
-# 轮询直到 25 个归档都出现在 ls --all
-got353=""
-for i in $(seq 1 100); do
-  cnt=$(curl -sf -X POST "http://127.0.0.1:$P353/api/term" -H 'Content-Type: application/json' -d '{"cmd":"ls --all","timeout":3}' | python3 -c 'import sys,json;print(json.load(sys.stdin).get("body","").count("arch0000"))' 2>/dev/null || echo 0)
-  if [ "$cnt" = "25" ]; then
-    got353=ok
-    break
-  fi
-  sleep 0.05
-done
-check "#353 归档会话后台恢复齐全" "$got353" "ok"
-kill "$PID353" 2>/dev/null || true
-wait "$PID353" 2>/dev/null || true
-rm -rf "$D353"
-
-# ---------------------------------------------------------------------------
 # #357 §1.4 写入自证：--verify 与 --op sha256
 echo
 echo "== #357 §1.4 写入校验"
