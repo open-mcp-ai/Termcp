@@ -4,6 +4,13 @@
 
 ### Added
 
+- Exported the daemon lifecycle as reusable packages (#309): `pkg/detach` (`Detach`,
+  `ProcessAlive`, `Terminate`, `Kill` — Unix `Setsid`/signals and Windows
+  `DETACHED_PROCESS`/`OpenProcess`, zero business dependencies) and `pkg/daemon`
+  (`Manager` with `Config{Name, DataDir, BuildArgs, BuildEnv, Probe, Stop}` for pidfile
+  services, plus `Spawn`, `IdleWatcher`, `PortReachable`, `IsServing`, `HTTPProbe`, and
+  `HTTPStop` for HTTP graceful shutdown on Windows). `internal/daemon` now delegates to
+  both instead of carrying a second copy.
 - A write can now prove itself and a file can be identified by content (#357 §1.4):
   `write … --verify` reads the bytes back and compares their SHA256 to the one it just
   computed (over the written range, so an `--offset` write verifies its own block),

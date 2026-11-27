@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -164,33 +163,37 @@ func TestIdleWatcherExemptRequestsDoNotFeedCountdown(t *testing.T) {
 	t.Fatal("exempt probes kept the countdown from firing")
 }
 
-// The predicate the daemon installs (daemon.IsProbe) must exempt the *whole*
-// probe, not just its first request: InspectEndpoint falls back to the public
-// /api.md fingerprint whenever the daemon probe is rejected, and that fallback
-// is still a liveness question. Exempting only /api/daemon let an unauthenticated
-// `termcp daemon status` feed the countdown of the guarded instance it was
-// reporting on.
+// THE PREDICATE MUST EXEMPT THE WHOLE PROBE, not just its first request: a caller falls
+// back to a public document when the status route is rejected, and that fallback is still
+// a liveness question. Exempting only the first path let an unauthenticated status query
+// feed the countdown of the very instance it was reporting on.
 func TestIdleWatcherProbeRequestsDoNotFeedCountdown(t *testing.T) {
 	fired := make(chan struct{})
 	w := NewIdleWatcher(200*time.Millisecond, func() { close(fired) })
-	w.Exempt = IsProbe // the predicate main installs
+	w.Exempt = func(r *http.Request) bool { return IsProbe(r, "/status") }
 	ts := httptest.NewServer(w.Track(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == apiDaemonPath && r.Header.Get("Authorization") == "" {
+		if r.URL.Path == "/status" && r.Header.Get("Authorization") == "" {
 			rw.WriteHeader(http.StatusUnauthorized) // what a guarded instance answers
 			return
 		}
-		fmt.Fprint(rw, "# Termcp HTTP API\n")
+		fmt.Fprint(rw, "the public document")
 	})))
 	t.Cleanup(ts.Close)
-	host, port := hostPort(t, ts.URL)
 
-	// Probe the way the CLI does, on a loop shorter than the countdown: the
-	// fallback to /api.md must not keep the instance alive either.
+	// Probe on a loop shorter than the countdown, taking BOTH requests each round: the
+	// rejected status route and the document it falls back to.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		rep := InspectEndpoint(context.Background(), host, port, "")
-		if !rep.Termcp {
-			t.Fatalf("probe lost the instance: %+v", rep)
+		for _, path := range []string{"/status", "/document"} {
+			req, err := http.NewRequest(http.MethodGet, ts.URL+path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp, err := http.DefaultClient.Do(MarkProbe(req))
+			if err != nil {
+				t.Fatalf("probe %s: %v", path, err)
+			}
+			resp.Body.Close()
 		}
 		select {
 		case <-fired:
@@ -199,19 +202,9 @@ func TestIdleWatcherProbeRequestsDoNotFeedCountdown(t *testing.T) {
 		}
 		time.Sleep(40 * time.Millisecond)
 	}
-	t.Fatal("repeated daemon status probes kept the countdown from firing")
+	t.Fatal("exempt probes kept the countdown from firing")
 }
 
-// The watcher keeps four fields in agreement (inFlight, timer, gen, fired) and
-// arms or disarms a timer as a side effect of counting. The failure mode of that
-// state machine is quiet: a request overlapping a firing timer could leave the
-// countdown disarmed, so the daemon would never exit on its own again - and an idle
-// daemon that stays alive looks exactly like a daemon with traffic.
-//
-// Each field is individually safe to touch, which is why this is worth testing
-// rather than reading: the invariant is about the four together, and a request
-// racing a firing timer is the case that exercises it. The overlap is driven
-// deliberately and the watcher must still be able to fire afterwards.
 func TestIdleWatcherStillFiresAfterOverlappingRequests(t *testing.T) {
 	for round := 0; round < 20; round++ {
 		fired := make(chan struct{}, 1)
