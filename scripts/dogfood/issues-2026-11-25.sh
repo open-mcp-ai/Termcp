@@ -600,7 +600,10 @@ out=$(curl -s -X POST "$EXT2" -H 'Content-Type: application/json' -H "Mcp-Sessio
   -d '{"jsonrpc":"2.0","id":77,"method":"tools/call","params":{"slow":2,"who":"slow"}}')
 elapsed=$(( $(date +%s) - started ))
 check "#328 慢调用等到了结果" "$out" '"who": "slow"'
-check "#328 确实等了（不是立刻 202）" "$elapsed" '2'
+# `date +%s` has one-second resolution, so a 2s sleep measures as 2 or 3 under load —
+# equality broke whenever a curl boundary crossed two second-ticks.
+if [ "$elapsed" -ge 2 ]; then waited=yes; else waited=no; fi
+check "#328 确实等了（不是立刻 202）" "$waited" 'yes'
 
 # 6) 扩展在请求中途消失：客户端拿到可读的错误，而不是挂到窗口用完。
 started=$(date +%s)
