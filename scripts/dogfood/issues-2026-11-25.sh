@@ -104,6 +104,40 @@ termj() { curl -s -X POST "http://127.0.0.1:$PORT/api/term" -H 'Content-Type: ap
 body() { printf '%s' "$1" | python3 -c 'import sys,json
 try: print(json.load(sys.stdin).get("body",""))
 except Exception: print("")'; }
+# await_pty_ready HANDLE — wait until the channel's shell is actually reading.
+#
+# A PTY THAT IS STILL STARTING DISCARDS WHAT IS TYPED INTO IT, and then every check about
+# that command describes a transcript in which it never ran: measured here, "#310 普通 run
+# 拿到 Completion" went red on a loaded machine while passing alone, and the command's own
+# marker was simply absent. The probe asks the SHELL to build the marker
+# (pty-ready-$(echo probe)) rather than grepping for a literal, because a literal matches
+# the echo of the line that contains it — a discarded input would then look ready, which is
+# the exact failure this exists to rule out.
+await_pty_ready() {
+  local h="$1" i=0 out
+  while [ "$i" -lt 60 ]; do
+    termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"run "+sys.argv[1]+" $1","args":["echo pty-ready-$(echo probe)"],"timeout":2}))' "$h")" >/dev/null
+    out=$(term "read $h")
+    if printf '%s' "$out" | grep -qF 'pty-ready-probe'; then
+      # LEAVE THE CHANNEL QUIET, and wait for the server to say so: a read that merely
+      # drains bytes returns while the prompt is still being painted, and the next run
+      # then starts from a line that is not a prompt — which trips the compound-line
+      # warning and lets the probe's leftovers land in its window. `Completion: quiet` is
+      # the server's own statement that the stream has been still for a whole window.
+      local j=0
+      while [ "$j" -lt 50 ]; do
+        if term "read $h" | grep -qF '"Completion":"quiet"'; then return 0; fi
+        j=$((j+1)); sleep 0.1
+      done
+      return 0
+    fi
+    i=$((i+1))
+    sleep 0.2
+  done
+  return 1
+}
+
 # api METHOD PATH [BODY] — print "CODE<TAB>BODY".
 api() {
   local method="$1" path="$2" body="${3:-}"
@@ -600,7 +634,10 @@ out=$(curl -s -X POST "$EXT2" -H 'Content-Type: application/json' -H "Mcp-Sessio
   -d '{"jsonrpc":"2.0","id":77,"method":"tools/call","params":{"slow":2,"who":"slow"}}')
 elapsed=$(( $(date +%s) - started ))
 check "#328 慢调用等到了结果" "$out" '"who": "slow"'
-check "#328 确实等了（不是立刻 202）" "$elapsed" '2'
+# `date +%s` has one-second resolution, so a 2s sleep measures as 2 or 3 under load —
+# equality broke whenever a curl boundary crossed two second-ticks.
+if [ "$elapsed" -ge 2 ]; then waited=yes; else waited=no; fi
+check "#328 确实等了（不是立刻 202）" "$waited" 'yes'
 
 # 6) 扩展在请求中途消失：客户端拿到可读的错误，而不是挂到窗口用完。
 started=$(date +%s)
@@ -625,6 +662,7 @@ echo
 echo "== #310 被动 OSC 133"
 H310=$(body "$(term "connect internal --name osc310")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
 check "#310 起了通道" "$H310" ':'
+await_pty_ready "$H310" || echo "       warning: the shell never reported ready; the checks below may describe a discarded command"
 
 # 1) 不写 --until，标记照样被读出来（此前只认 --until exit）。
 R310=$(termj "$(python3 -c 'import json,sys
@@ -810,14 +848,19 @@ fi
 # #269 #1 — 空正文的回执不能宣称交付了字节
 echo
 echo "== #269 空窗口不谎报范围"
-H269=$(body "$(term "connect internal --name e269")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+# AN EMPTY WINDOW HAS TO BE A FACT, NOT A RACE. On a tty channel every keystroke is
+# echoed by the pty, so "nothing arrived yet" depends on whether the echo beat the
+# snapshot: measured here, the same call answered 204 four times and 200 once (the echo
+# of the command line) — a correct reply failing the check for the wrong reason, and the
+# reason it went red on a loaded machine. A pipe channel has no echo and no prompt, so
+# the window is empty by construction; the reply shape under test is the same one.
+H269=$(body "$(term "connect internal --name e269")" | grep -oE '[0-9a-f]{12}' | head -1)
 E269=$(termj "$(python3 -c 'import json,sys
-print(json.dumps({"cmd":"run "+sys.argv[1]+" $1","args":["sleep 1"],"timeout":0.05}))' "$H269")")
+print(json.dumps({"run":"sleep 1","session":sys.argv[1],"timeout":0}))' "$H269")")
 check "#269 空窗口是 204" "$E269" '"code":204'
 check "#269 范围说没交付" "$E269" 'bytes */'
 check_not "#269 不再宣称交付了区间" "$E269" 'bytes 0-'
 check "#269 仍给重读位置" "$E269" '"Input-At"'
-L269=$(body "$(term "read $H269 --timeout 1" 2>/dev/null || true)")
 term "close $H269" >/dev/null
 
 # ---------------------------------------------------------------------------
