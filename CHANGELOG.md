@@ -4,6 +4,15 @@
 
 ### Added
 
+- Cross-file `grep`/`find` on `read … file` (#357 §1.1): `--grep RE` now filters a
+  FILE (it parsed and was silently dropped — the whole file came back) and searches a
+  DIRECTORY, answering `path:line:text` with `--glob`/`--context`/`--grep-limit` and a
+  closing line that names what it walked; `--name GLOB` answers the other question
+  (`find`: paths only). Matching happens in this process over the SFTP bytes, so a POSIX
+  host and a Windows one answer identically and a host with `rg` behaves like one
+  without. Every file the walk opens passes the same admission a single read passes
+  (the #358 class), links inside the tree are not followed, and files skipped as too
+  large, binary or refused are named rather than silently missing.
 - `run`: one shell line, no DSL (#319). `{"run": "df -h", "session": "6a29"}` opens a
   one-shot pipe and answers with `exit_code` + stdout; `{"run": "cd /srv", "shell":
   "6a29:1"}` types into an existing interactive shell and keeps its state. The line is

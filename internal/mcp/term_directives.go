@@ -411,6 +411,19 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 					"`read <channel> --wait` first, then `--grep` over what arrived.")}
 			}
 		}
+		// `--name`, `--glob` AND `--context` BELONG TO A FILE SEARCH and name nothing on a
+		// stream: a channel has no file names to match and no lines-around that `--tail`
+		// does not already answer. Refused rather than accepted, because a flag that
+		// parses and changes nothing answers a different question than the one asked.
+		if stmt.Kind != "file" {
+			for _, f := range []string{"name", "glob", "context"} {
+				if stmt.FlagState(f) != directive.FlagAbsent {
+					return []envelope.Slot{badRequest(stmt, "`--"+f+"` searches FILES (`read <session> file <path> "+
+						"--grep RE --"+f+" …`), and a channel read has no file names or file lines to select. "+
+						"`--tail N` is the channel spelling for the lines around a match.")}
+				}
+			}
+		}
 		if stmt.Kind == "file" {
 			flags := map[string]string{
 				"action":      "read",
