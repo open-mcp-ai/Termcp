@@ -16,6 +16,11 @@ func TestReadGrepFiltersBeforeTheWindow(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	// THE SHELL HAS TO BE READING BEFORE A LINE IS TYPED. A pty that is still starting
+	// discards input, and then the search below finds an empty transcript and reports it
+	// as the cursor rule being broken. This is the repository's state probe (term_test.go),
+	// not a sleep: it asks the shell to build a marker, so a discarded line cannot pass.
+	awaitPtyReady(t, s, h)
 
 	// Feed a predictable multi-line transcript:
 	//   1: start
@@ -71,6 +76,11 @@ func TestReadGrepNoMatchAnswers204WithStats(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	// THE SHELL HAS TO BE READING BEFORE A LINE IS TYPED. A pty that is still starting
+	// discards input, and then the search below finds an empty transcript and reports it
+	// as the cursor rule being broken. This is the repository's state probe (term_test.go),
+	// not a sleep: it asks the shell to build a marker, so a discarded line cannot pass.
+	awaitPtyReady(t, s, h)
 
 	termText(t, s, map[string]any{"cmd": "run " + h + " $1", "args": []any{"echo ONLY_ONE_LINE"}, "timeout": 2})
 
@@ -88,6 +98,11 @@ func TestReadGrepBadRegexAnswers400(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	// THE SHELL HAS TO BE READING BEFORE A LINE IS TYPED. A pty that is still starting
+	// discards input, and then the search below finds an empty transcript and reports it
+	// as the cursor rule being broken. This is the repository's state probe (term_test.go),
+	// not a sleep: it asks the shell to build a marker, so a discarded line cannot pass.
+	awaitPtyReady(t, s, h)
 
 	got := termText(t, s, map[string]any{"cmd": "read " + h + " --grep '[unclosed'"})
 	if !strings.HasPrefix(got, "TERM/1 400") {
@@ -109,6 +124,11 @@ func TestReadGrepDoesNotConsumeTheTranscript(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	// THE SHELL HAS TO BE READING BEFORE A LINE IS TYPED. A pty that is still starting
+	// discards input, and then the search below finds an empty transcript and reports it
+	// as the cursor rule being broken. This is the repository's state probe (term_test.go),
+	// not a sleep: it asks the shell to build a marker, so a discarded line cannot pass.
+	awaitPtyReady(t, s, h)
 
 	script := writeScript(t, "printf 'AAA\\nBBB\\nCCC\\n'")
 	termText(t, s, map[string]any{
@@ -151,12 +171,17 @@ func TestReadGrepDoesNotConsumeTheTranscript(t *testing.T) {
 func waitForGrepContent(t *testing.T, s *Server, handle, marker string) {
 	t.Helper()
 	deadline := time.Now().Add(15 * time.Second)
+	var last string
 	for time.Now().Before(deadline) {
-		out := termText(t, s, map[string]any{"cmd": "read " + handle + " --from-line 1"})
-		if strings.Contains(out, marker) {
+		last = termText(t, s, map[string]any{"cmd": "read " + handle + " --from-line 1"})
+		if strings.Contains(last, marker) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("the channel never became readable past %q", marker)
+	// THE LAST READ IS PART OF THE FAILURE. Without it the message says only that a
+	// marker never appeared, which is true of a shell that never ran the command, a
+	// transcript that lost the line, and a window that started past it — three different
+	// defects that need three different fixes.
+	t.Fatalf("the channel never became readable past %q; last read:\n%s", marker, last)
 }
