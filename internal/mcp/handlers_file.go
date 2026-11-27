@@ -893,11 +893,23 @@ func resolveLocalPath(p string) string {
 // recovered from the error text (which is the server's, and may be rewritten).
 func fileErr(err error, remotePath string) *mcp.CallToolResult {
 	code, msg := classifyFileErr(err)
-	if code == CodeOperationFailed {
-		msg += wireSpellingHint(remotePath)
-	}
 	if code == CodeFileNotFound {
 		msg = fmt.Sprintf("%s. Check that the host and remote path are correct before retrying", msg)
+	}
+	// THE HINT GOES FIRST WHEN THE PATH SPELLING IS WRONG (#357 §1.5).
+	//
+	// It used to be appended, so the first line of a failure — the line a log shows and a
+	// reader skims — was the server's error text, and the one sentence that says what to
+	// write instead came after it. A caller who read only the top concluded the file name
+	// was bad. Putting the fix first costs nothing and answers that in the same bytes.
+	//
+	// STILL ONLY ON CodeOperationFailed: a 404 or a 403 is a verdict about a path the
+	// server COULD resolve, and spelling advice there is noise on the common case (see
+	// TestTheSpellingHintIsNotAddedToAPlainMiss).
+	if code == CodeOperationFailed {
+		if hint := strings.TrimPrefix(wireSpellingHint(remotePath), "\n\n"); hint != "" {
+			msg = hint + "\n\n" + msg
+		}
 	}
 	return toolError(code, "%s", msg)
 }
