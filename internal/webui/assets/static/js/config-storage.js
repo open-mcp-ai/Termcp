@@ -193,6 +193,7 @@ _configStorageRoot.innerHTML = [
   '<div class="modal" style="max-width:420px"><div class="modal-h"><h2 id="secret-title"></h2>',
   '<button type="button" id="secret-x" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M2 2l8 8M10 2L2 10"/></svg></button>',
   '</div><div class="modal-body">',
+  '<p id="secret-err" class="err" style="display:none"></p>',
   '<div class="conn-field"><label for="secret-input" id="secret-label" data-i18n="storage.keyPassLabel">Passphrase</label>',
   '<input type="password" id="secret-input" maxlength="256" spellcheck="false" autocomplete="new-password"></div>',
   /* Shown only when the caller asks for two answers — changing a passphrase needs the
@@ -242,6 +243,17 @@ document.getElementById('nethub-menu-delete').insertAdjacentHTML('beforebegin',
   '<button type="button" class="nethub-menu-item" id="nethub-menu-deactivate" role="menuitem" title="Deactivate selected hosts" data-i18n-title="storage.deactivateTitle">' +
   '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="5.2"/><path d="M5.4 8h5.2"/></svg>' +
   '<span data-i18n="storage.deactivateSelected">Deactivate selected</span></button>');
+
+/* The panel's own error line is where a failure belongs — unless the panel is not the
+   thing on screen. Every card-initiated action posts from a closed panel, so writing
+   only there made a wrong passphrase share the fate of a message shouted in an empty
+   room: the request failed, nothing was activated, and the page said nothing at all. */
+function configStorageReportFailure(err) {
+  var message = configStorageFailure(err);
+  configStorageError(message);
+  var panel = document.getElementById('modal-config-storage');
+  if (!panel || panel.classList.contains('hidden')) showCopyToast(message);
+}
 
 function configStorageError(message) {
   var el = document.getElementById('config-storage-err');
@@ -1043,6 +1055,10 @@ function configStoragePromptSecret(opts) {
   document.getElementById('secret-title').textContent = opts.title || '';
   document.getElementById('secret-ok').textContent = opts.okText || t('common.done');
   var input = document.getElementById('secret-input');
+  var errEl = document.getElementById('secret-err');
+  errEl.textContent = '';
+  errEl.style.display = 'none';
+  document.getElementById('secret-ok').disabled = false;
   input.value = '';
   /* A one-field prompt resolves to a string (the passphrase), a two-field one to an
      object — the caller knows which it asked for. */
@@ -1067,9 +1083,23 @@ function configStoragePromptSecret(opts) {
       resolve(value);
     };
     var onKey = function (e) { if (e.key === 'Enter') { e.preventDefault(); ok.click(); } };
+    var fail = function (err) {
+      errEl.textContent = configStorageFailure(err);
+      errEl.style.display = 'block';
+      ok.disabled = false;
+      try { input.focus(); input.select(); } catch (ignored) {}
+    };
     ok.onclick = function () {
-      if (!twoFields) { close(String(input.value || '')); return; }
-      close({first: String(input.value || ''), second: String(input2.value || '')});
+      var value = twoFields
+        ? {first: String(input.value || ''), second: String(input2.value || '')}
+        : String(input.value || '');
+      /* The caller can hand over the work this answer is for. Then a wrong passphrase
+         comes back IN the box: a typo is one edit here, instead of the box closing and
+         the person finding the host again to press it a second time. */
+      if (!opts.submit) { close(value); return; }
+      ok.disabled = true;
+      errEl.style.display = 'none';
+      opts.submit(value).then(function () { close(value); }, function (err) { fail(err); });
     };
     cancel.onclick = function () { close(null); };
     document.getElementById('secret-x').onclick = function () { close(null); };
@@ -1215,7 +1245,7 @@ function configStorageConvert(action, names, options) {
   });
 }
 
-function configStoragePostBatch(path, body, onDone) {
+function configStoragePostBatch(path, body, onDone, onError) {
   setConfigStorageBusy(true);
   configStorageError('');
   configStorageRequest(path, {
@@ -1226,7 +1256,10 @@ function configStoragePostBatch(path, body, onDone) {
       if (typeof _nodeBatch !== 'undefined' && _nodeBatch) _nodeBatch.update();
       if (onDone) onDone(response);
     });
-  }).catch(function (err) { configStorageError(configStorageFailure(err)); })
+  }).catch(function (err) {
+    if (onError) { onError(err); return; }
+    configStorageReportFailure(err);
+  })
     .finally(function () { setConfigStorageBusy(false); });
 }
 
@@ -1334,17 +1367,20 @@ function configStorageUnlockHost(name) {
   if (key.plugged) { configStorageOpenActivate([name], configStorageOneHostOptions(name)); return; }
   configStoragePromptSecret({
     title: t('storage.loadPassphraseTitle', {name: configStorageKeyLabel(key)}),
-    okText: t('storage.keyPlug')
+    okText: t('storage.keyPlug'),
+    submit: function (passphrase) {
+      return configStorageRequest('/api/keychain/' + encodeURIComponent(key.id) + '/plug', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json; charset=utf-8'},
+        body: JSON.stringify({passphrase: passphrase})
+      }).then(function (payload) {
+        configStorageApplyPayload(payload);
+        return configStorageRefreshViews();
+      });
+    }
   }).then(function (passphrase) {
     if (passphrase === null) return;
-    return configStorageRequest('/api/keychain/' + encodeURIComponent(key.id) + '/plug', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json; charset=utf-8'},
-      body: JSON.stringify({passphrase: passphrase})
-    }).then(function (payload) {
-      configStorageApplyPayload(payload);
-      return configStorageRefreshViews();
-    }).then(function () { configStorageActivatedToast(key.hosts); });
+    configStorageActivatedToast(key.hosts);
   }).catch(function (err) { showCopyToast(configStorageFailure(err)); });
 }
 
@@ -1352,8 +1388,16 @@ function configStorageOneHostOptions(name) {
   return {title: t('storage.activateOneTitle', {name: name})};
 }
 
+function activateError(message) {
+  var el = document.getElementById('modal-activate-err');
+  if (!el) return;
+  el.textContent = String(message || '');
+  el.style.display = message ? 'block' : 'none';
+}
+
 function configStorageOpenActivate(names, options) {
   options = options || {};
+  activateError('');
   var groups = configStorageActivateGroups(names);
   if (!groups.length) { showCopyToast(t('storage.selectAtLeastOne')); return; }
   var fields = document.getElementById('modal-activate-fields');
@@ -1392,9 +1436,14 @@ function configStorageSubmitActivate(names) {
     if (!inputs[i].value) continue;
     passphrases[inputs[i].getAttribute('data-activate-key')] = inputs[i].value;
   }
-  hideModal('modal-activate');
+  /* Not before the answer: a wrong passphrase closed this dialog and wrote the reason
+     into the keychain panel, which is not open — the person saw a dialog vanish and
+     nothing else. The box stays until the key opens, with the reason under it. */
   configStoragePostBatch('/api/config-storage/activate', {names: names, passphrases: passphrases}, function () {
+    hideModal('modal-activate');
     showCopyToast(tCount('storage.activated.one', 'storage.activated.other', {count: names.length}));
+  }, function (err) {
+    activateError(configStorageFailure(err));
   });
 }
 

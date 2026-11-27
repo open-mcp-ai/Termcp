@@ -72,6 +72,48 @@ func passphraseRepository(t *testing.T, kek byte, host, body string) (*Repositor
 	return repo, keyID, dir
 }
 
+/* Sealing a host to a key that carries a passphrase proves the passphrase first.
+ *
+ * A key keeps no verifier for its own passphrase — a stored one would be an offline
+ * oracle for guessing, which is what the per-host salts exist to prevent. The hosts
+ * it already seals are the verifier. Without that check a typo was not a failure but
+ * a SILENT redefinition: the new host was sealed to the typo while its siblings stayed
+ * sealed to the real passphrase, and the panel said "converted 1 host".
+ *
+ * Mutation check: drop VerifyPassphrase from the encrypt options and the first half
+ * fails; drop the check in put and it fails as "written".
+ */
+func TestSealingAHostWithTheWrongPassphraseIsRefused(t *testing.T) {
+	repo, keyID, _ := passphraseRepository(t, 0xd1, "alpha", "host = \"a.example\"\n")
+
+	// A passphrase that opens nothing this key seals: refused, and nothing is written.
+	err := repo.SaveWithOptions("beta", []byte("host = \"b.example\"\n"),
+		SaveOptions{KeyID: keyID, Passphrase: "not the passphrase", VerifyPassphrase: true})
+	if !errors.Is(err, ErrPassphraseWrong) {
+		t.Fatalf("sealing with a wrong passphrase = %v; want ErrPassphraseWrong", err)
+	}
+	if _, ok := repo.snap().refs["beta"]; ok {
+		t.Fatal("the host was written even though the passphrase opened nothing")
+	}
+
+	// Opting out is still available to the one caller that must differ: changing a
+	// passphrase re-seals every host to a NEW one, so its save cannot be checked
+	// against the old records.
+	if err := repo.SaveWithOptions("beta", []byte("host = \"b.example\"\n"),
+		SaveOptions{KeyID: keyID, Passphrase: "not the passphrase"}); err != nil {
+		t.Fatalf("a save that does not ask for proof was refused: %v", err)
+	}
+
+	// And the real passphrase still works, which is the property the whole check is for.
+	if err := repo.SaveWithOptions("gamma", []byte("host = \"c.example\"\n"),
+		SaveOptions{KeyID: keyID, Passphrase: testPassphrase, VerifyPassphrase: true}); err != nil {
+		t.Fatalf("sealing with the key's own passphrase = %v", err)
+	}
+	if _, err := repo.Read("gamma"); err != nil {
+		t.Fatalf("the host sealed with the right passphrase is unreadable: %v", err)
+	}
+}
+
 /* Only the key is plugged in. The DEK is unwrapped, but the body key needs the
  * activation key, so the host is not readable — and the answer says "activate",
  * not "load a key". (§12 "只插钥匙、不激活")

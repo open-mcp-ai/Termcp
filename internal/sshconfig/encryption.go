@@ -671,7 +671,12 @@ func (s *Store) EncryptProfiles(names []string, keyID configstore.ID, passphrase
 	if len(items) == 0 && len(rekeys) == 0 {
 		return results, nil
 	}
-	options := configstore.SaveOptions{KeyID: keyID, Passphrase: passphrase}
+	/* VerifyPassphrase: sealing a host to a passphrase key is the moment the person
+	   types that key's passphrase, and a typo here would seal THIS host to the typo
+	   while its siblings stayed sealed to the real one. The store answers by opening
+	   a host the key already seals; a key that seals nothing yet has nothing to
+	   compare, and this sealing defines it. */
+	options := configstore.SaveOptions{KeyID: keyID, Passphrase: passphrase, VerifyPassphrase: true}
 	if len(items) > 0 {
 		if err := s.importCiphertexts(repo, items, options); err != nil {
 			for _, item := range items {

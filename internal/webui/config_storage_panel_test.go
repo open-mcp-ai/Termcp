@@ -96,6 +96,64 @@ func TestKeychainPanelHasNoLockVocabulary(t *testing.T) {
 	}
 }
 
+/* A wrong passphrase is said where the question was asked.
+ *
+ * Three paths ask for one. The prompt for loading a key now hands the request to the
+ * dialog, so a typo comes back under the field and the box stays open — a second
+ * press and a retyped word was the cost of getting it wrong once. Activation used to
+ * hide its dialog BEFORE posting, and the failure was written into the keychain
+ * panel's error line, which is not open when the action starts from a host card: the
+ * dialog vanished, nothing was activated, and the page said nothing. The panel's line
+ * stays the first choice and a toast is the fallback, because a message shouted into a
+ * closed panel is the same as no message.
+ *
+ * Mutation check: drop the `#secret-err` paragraph, or the `hideModal` back in front of
+ * the activate POST, or the toast in configStorageReportFailure — each fails by name.
+ */
+func TestAWrongPassphraseIsSaidWhereTheQuestionWasAsked(t *testing.T) {
+	panel := readAssetLF(t, "static/js/config-storage.js")
+
+	prompt := panel[strings.Index(panel, "function configStoragePromptSecret"):]
+	if i := strings.Index(prompt, "function configStoragePickKey"); i > 0 {
+		prompt = prompt[:i]
+	}
+	// the error line lives in the dialog's markup, the rest in the function that fills it
+	if !strings.Contains(panel, `id="secret-err"`) {
+		t.Error("the prompt has no line to say that the passphrase was wrong")
+	}
+	for _, want := range []string{
+		"opts.submit(value).then(function () { close(value); }, function (err) { fail(err); });",
+		"errEl.textContent = configStorageFailure(err);",
+		"errEl.style.display = 'block';",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the prompt cannot say that the passphrase was wrong: %q is gone", want)
+		}
+	}
+
+	submit := panel[strings.Index(panel, "function configStorageSubmitActivate"):]
+	if i := strings.Index(submit, "function configStorageOpenActivate"); i > 0 {
+		submit = submit[:i]
+	}
+	if head := submit[:strings.Index(submit, "configStoragePostBatch")]; strings.Contains(head, "hideModal('modal-activate')") {
+		t.Error("the activate dialog closes before the answer: a wrong passphrase leaves nothing on screen")
+	}
+	if !strings.Contains(submit, "activateError(") {
+		t.Error("the activate dialog has no way to show why it refused")
+	}
+
+	report := panel[strings.Index(panel, "function configStorageReportFailure"):]
+	if i := strings.Index(report, "function configStorageError"); i > 0 {
+		report = report[:i]
+	}
+	if !strings.Contains(report, "panel.classList.contains('hidden')") || !strings.Contains(report, "showCopyToast(message)") {
+		t.Error("a failure from a card writes only into the closed panel's error line")
+	}
+	if !strings.Contains(panel, "configStorageReportFailure(err);") {
+		t.Error("the batch path no longer routes failures through the panel-or-toast choice")
+	}
+}
+
 /* A hint never pulls itself up.
  *
  * `.conn-field-hint` carried `margin: -8px 0 8px`, which only looked right in one

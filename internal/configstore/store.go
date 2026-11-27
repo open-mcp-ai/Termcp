@@ -372,6 +372,15 @@ type SaveOptions struct {
 	// ReuseActivation keeps the activation key this host already has in memory
 	// instead of deriving a new one from Passphrase.
 	ReuseActivation bool
+	// VerifyPassphrase makes the save prove the passphrase before it mints a new
+	// sealing: a key has no verifier of its own (storing one would allow an offline
+	// guess), but the hosts it already seals are one. A typo would otherwise seal
+	// the new host to the typo, silently: the key's other hosts stay sealed to the
+	// real passphrase and this one answers to a word nobody meant to choose.
+	//
+	// Changing a passphrase must NOT set it — there the new passphrase is supposed
+	// to differ from every record on disk.
+	VerifyPassphrase bool
 }
 
 /* put writes each host's new generation, then publishes it.
@@ -393,6 +402,16 @@ func (r *Repository) put(items []Item, overwrite bool, options SaveOptions) erro
 		return err
 	}
 	cur := r.snap()
+	/* Once per save, not once per host: the check is an Argon2id against a sealed
+	   host of the same key, and a batch of five would pay for it five times over. */
+	if options.VerifyPassphrase && options.Passphrase != "" && !options.KeyID.IsZero() {
+		keyID := options.KeyID
+		if _, plugged := cur.keyring.key(keyID); plugged {
+			if err := r.verifyPassphrase(keyID, options.Passphrase); err != nil {
+				return err
+			}
+		}
+	}
 	next := cloneRefs(cur.refs)
 	seen := make(map[string]struct{}, len(items))
 	type pending struct {
