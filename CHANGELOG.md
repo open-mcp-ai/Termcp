@@ -4,6 +4,10 @@
 
 ### Added
 
+- `help open` now answers with its summary instead of the whole page (#324): every
+  declared flag has one line, `--all` still returns the page, and the published example
+  is fixed — it named a channel (`open a1f3:1 …`) where the verb acts on a session, so
+  copying it failed to parse.
 - Exported the daemon lifecycle as reusable packages (#309): `pkg/detach` (`Detach`,
   `ProcessAlive`, `Terminate`, `Kill` — Unix `Setsid`/signals and Windows
   `DETACHED_PROCESS`/`OpenProcess`, zero business dependencies) and `pkg/daemon`
