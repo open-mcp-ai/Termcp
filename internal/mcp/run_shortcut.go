@@ -33,6 +33,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -186,7 +187,9 @@ func (s *Server) runOnce(ctx context.Context, target, line string, win termArgs)
 	// THE HANDLE IS NAMED, because a window that expires leaves a process still running
 	// and reading or closing it takes an address. Same two headers the `use:` road adds,
 	// for the same reason.
-	slot.Headers["Channel"] = cs.ID
+	// AN ADDRESS `read` ACCEPTS (#303): the shell id is the registry's key, but a caller
+	// holds handles, and `read <session>:<index>` is the one that names this channel.
+	slot.Headers["Channel"] = fmt.Sprintf("%s:%d", sess.ID, cs.Info().Index)
 	if sess.ID != "" {
 		slot.Headers["Session"] = sess.ID
 	}

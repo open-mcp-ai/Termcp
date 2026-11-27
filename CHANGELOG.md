@@ -142,6 +142,10 @@
 
 ### Fixed
 
+- The `Channel` header now carries an address `read` accepts (#303): `run use:<host>` and
+  the one-shot shortcut answered with the shell's internal id, so following the header
+  read the session's first channel and returned nothing while the process it started kept
+  running. A closed pipe also reports its exit code and points at `--stream e` for stderr.
 - A Windows-path spelling failure now puts the working spelling on its FIRST line
   (#357 §1.5): the advice used to be appended after the server's error text, so a caller
   skimming the top of a log concluded the file name was bad. It is still only offered on
