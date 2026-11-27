@@ -813,14 +813,19 @@ fi
 # #269 #1 — 空正文的回执不能宣称交付了字节
 echo
 echo "== #269 空窗口不谎报范围"
-H269=$(body "$(term "connect internal --name e269")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+# AN EMPTY WINDOW HAS TO BE A FACT, NOT A RACE. On a tty channel every keystroke is
+# echoed by the pty, so "nothing arrived yet" depends on whether the echo beat the
+# snapshot: measured here, the same call answered 204 four times and 200 once (the echo
+# of the command line) — a correct reply failing the check for the wrong reason, and the
+# reason it went red on a loaded machine. A pipe channel has no echo and no prompt, so
+# the window is empty by construction; the reply shape under test is the same one.
+H269=$(body "$(term "connect internal --name e269")" | grep -oE '[0-9a-f]{12}' | head -1)
 E269=$(termj "$(python3 -c 'import json,sys
-print(json.dumps({"cmd":"run "+sys.argv[1]+" $1","args":["sleep 1"],"timeout":0.05}))' "$H269")")
+print(json.dumps({"run":"sleep 1","session":sys.argv[1],"timeout":0}))' "$H269")")
 check "#269 空窗口是 204" "$E269" '"code":204'
 check "#269 范围说没交付" "$E269" 'bytes */'
 check_not "#269 不再宣称交付了区间" "$E269" 'bytes 0-'
 check "#269 仍给重读位置" "$E269" '"Input-At"'
-L269=$(body "$(term "read $H269 --timeout 1" 2>/dev/null || true)")
 term "close $H269" >/dev/null
 
 # ---------------------------------------------------------------------------
