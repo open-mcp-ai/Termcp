@@ -52,7 +52,7 @@ const (
 // a batch that half-applied would leave the caller comparing the reply against the
 // directory to work out what landed. Keys are refused by name when they are absolute,
 // when they climb out of the directory, or when the payload is not an object at all.
-func (s *Server) writeTree(ctx context.Context, cli *sftp.Client, sessionID, remotePath, data, mode string, dryRun bool) *mcpgo.CallToolResult {
+func (s *Server) writeTree(ctx context.Context, cli *sftp.Client, sessionID, remotePath, data, mode string, dryRun, verify bool) *mcpgo.CallToolResult {
 	var files map[string]string
 	dec := json.NewDecoder(strings.NewReader(data))
 	dec.UseNumber()
@@ -132,6 +132,14 @@ func (s *Server) writeTree(ctx context.Context, cli *sftp.Client, sessionID, rem
 			failed++
 			b.WriteString("FAIL  " + full + "  " + firstLineOf(err.Error()) + "\n")
 			continue
+		}
+		if verify {
+			got, _, verr := cli.SHA256Range(full, 0, rep.BytesWritten)
+			if verr != nil || got != rep.SHA256 {
+				failed++
+				b.WriteString("FAIL  " + full + "  verify mismatch\n")
+				continue
+			}
 		}
 		written++
 		bytes += rep.BytesWritten

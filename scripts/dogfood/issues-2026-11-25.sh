@@ -920,6 +920,27 @@ kill "$PID353" 2>/dev/null || true
 wait "$PID353" 2>/dev/null || true
 rm -rf "$D353"
 
+# ---------------------------------------------------------------------------
+# #357 §1.4 写入自证：--verify 与 --op sha256
+echo
+echo "== #357 §1.4 写入校验"
+H357V=$(body "$(term "connect internal --name r357v")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+S357V=${H357V%%:*}
+F357V=/tmp/dg-357v-$$
+R357V=$(body "$(term "write $S357V file $F357V --data verify-me --verify")")
+check "#357 写入回执自称已验证" "$R357V" "verified: true"
+WANT357=$(printf 'verify-me' | shasum -a 256 | cut -d' ' -f1)
+check "#357 回执哈希就是载荷摘要" "$R357V" "$WANT357"
+check "#357 回执带宿主机字节数" "$R357V" "bytes_on_host"
+R357H=$(body "$(term "get $S357V file $F357V --op sha256")")
+check "#357 --op sha256 与本地一致" "$R357H" "$WANT357"
+R357R=$(body "$(term "get $S357V file $F357V --op stat --offset 3")")
+check "#357 --offset 只在 sha256 下有效" "$R357R" "only applies to"
+R357C=$(body "$(term "write $S357V file $F357V --offset 0 --data VER --verify")")
+check "#357 部分写只验自己那块" "$R357C" "verified: true"
+term "close $H357V" >/dev/null
+rm -f "$F357V"
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi

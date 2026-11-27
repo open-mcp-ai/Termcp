@@ -442,6 +442,38 @@ func (s *Client) writeInline(remotePath string, offset *int64, data string, mode
 	}, nil
 }
 
+// SHA256Range hashes a byte range of a remote file WITHOUT reading it into memory.
+//
+// IT IS THE VERDICT HALF OF A WRITE (#357 §1.4). The write receipt already carries the
+// SHA256 of the bytes it sent; the only thing that turns that into a check is hashing what
+// the far side actually holds, and a 2 GB file cannot be pulled into this process to be
+// measured. length 0 hashes to end of file.
+//
+// The result also carries the size of the range, so a caller comparing it to what it wrote
+// sees both facts that can differ: content and length.
+func (s *Client) SHA256Range(remotePath string, offset, length int64) (string, int64, error) {
+	f, err := s.client.Open(remotePath)
+	if err != nil {
+		return "", 0, fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+	if offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return "", 0, fmt.Errorf("seek: %w", err)
+		}
+	}
+	var r io.Reader = f
+	if length > 0 {
+		r = io.LimitReader(f, length)
+	}
+	h := sha256.New()
+	n, err := io.Copy(h, r)
+	if err != nil {
+		return "", n, fmt.Errorf("read: %w", err)
+	}
+	return hex.EncodeToString(h.Sum(nil)), n, nil
+}
+
 // NativeLocalPath rewrites a POSIX-shell path into the spelling this host's file
 // system API understands.
 //

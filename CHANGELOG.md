@@ -4,6 +4,14 @@
 
 ### Added
 
+- A write can now prove itself and a file can be identified by content (#357 §1.4):
+  `write … --verify` reads the bytes back and compares their SHA256 to the one it just
+  computed (over the written range, so an `--offset` write verifies its own block),
+  `--recursive --verify` checks every file, and `get <session> file <path> --op sha256
+  [--offset N] [--length N]` hashes on the host without pulling the file into memory.
+  A mismatch is a failure with both digests named, not a 200: the bytes are already
+  there, so the reply says the contents are unknown rather than absent. The hash op
+  needs `file.read` as well as the filesystem capability — a digest is content.
 - Cross-file `grep`/`find` on `read … file` (#357 §1.1): `--grep RE` now filters a
   FILE (it parsed and was silently dropped — the whole file came back) and searches a
   DIRECTORY, answering `path:line:text` with `--glob`/`--context`/`--grep-limit` and a
