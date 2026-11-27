@@ -166,6 +166,9 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	if remotePath == "" {
 		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
+	if rawSrc, ok := args["copy_src"].(map[string]any); ok {
+		return s.replayApprovedCopy(ctx, sessionID, remotePath, rawSrc)
+	}
 	if data == "" {
 		return toolError(CodeInvalidArgument, "%s", "data required"), nil
 	}

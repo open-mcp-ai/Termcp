@@ -87,6 +87,14 @@ func summarizeOperation(tool string, args map[string]any) string {
 	switch tool {
 	case "file_write":
 		path := s("remote_path")
+		// A PIPELINE'S WRITE HAS NO `data` ARGUMENT — the bytes come from the other end —
+		// so the byte count would read "write 0 B", which is a number a reviewer could
+		// believe. Naming the source is also the fact they need: approving "write
+		// /srv/x" without knowing what lands there is not a decision about anything
+		// (issue #358).
+		if from := s("copy_from"); from != "" {
+			return "copy " + from + " to " + path
+		}
 		return fmt.Sprintf("write %s to %s", describeBytes(len(s("data")), s("mode")), path)
 
 	case "file_delete":

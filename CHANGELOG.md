@@ -107,6 +107,11 @@
 
 ### Fixed
 
+- Fixed a whitelist and review-gate bypass on `read … | write …` pipelines (#358):
+  both ends now go through capability/path admission (`file_read` or `shell_output` on
+  the source, `file_write` on the destination) before the copy starts. A copy into a
+  review-gated session holds the operation as `copy <src> to <dst>` and runs the copy
+  when approved.
 - `/ext/{name}/stream` is served by the same streamable-HTTP transport as the
   instance's own `/stream`, instead of a second, hand-rolled copy of it. Three things
   the copy got wrong are gone with it: a request answered `202` (the spec forbids it,
