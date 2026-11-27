@@ -279,15 +279,15 @@
   besides `bytes_written` the reply carries `line` and a one-line `diff` (`L2: -
   timeout = 5 | + timeout = 30`). Checking an edit no longer means reading the file
   back — the exact-replace primitive exists to avoid paying for the whole file.
-
 ### Fixed
 
 - A reply no longer claims bytes it did not deliver (#269 #1): an empty window answered
   `200` with `Content-Range: bytes A-B/N` naming the pty's stripped echo, so a caller
   paging by that header skipped the window it was told it had seen. It is now `204` with
   `Content-Range: bytes */N` and `Input-At`, and the output that arrives later is still
-  readable. `fold` (`Folded`) and `--stream` (`Omitted`) keep their ranges: those name
-  what they withheld.
+  readable. A folded window (`Folded`) keeps its 206 and its range: it names the span it
+  withheld and the flag that fetches it. A `--stream` filter that selected nothing stays
+  `bytes */0` with `Omitted` — its own stream total is the only true range.
 - Fixed a whitelist and review-gate bypass on `read … | write …` pipelines (#358):
   both ends now go through capability/path admission (`file_read` or `shell_output` on
   the source, `file_write` on the destination) before the copy starts. A copy into a
