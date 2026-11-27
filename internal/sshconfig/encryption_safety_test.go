@@ -3,12 +3,82 @@ package sshconfig
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/open-mcp-ai/termcp/internal/configstore"
 )
+
+/* One host costs one directory listing, not one per host in the store.
+ *
+ * Two regressions in this area were both "ask a per-host question by scanning the
+ * whole store": `plaintextFold` read every host directory to find one name's
+ * spelling, and `Load` consulted the catalog listing per host. Neither showed up as
+ * a failure anywhere — they showed up as a list that took 2.4 s for 1000 hosts. A
+ * counter makes the property arithmetic instead of a stopwatch: 200 hosts, and the
+ * work must stay proportional to the hosts asked about.
+ *
+ * Mutation check: delete the exact-name check in `plaintextFold` (so it scans the
+ * root again) and this fails by name; delete the directory check in `encryptedFold`
+ * and it fails too.
+ */
+func TestOneHostCostsOneDirectoryListing(t *testing.T) {
+	const hosts = 200
+	dir := t.TempDir()
+	store := NewStore(dir)
+	for i := 0; i < hosts; i++ {
+		name := fmt.Sprintf("host-%03d", i)
+		sub := filepath.Join(dir, "ssh_configs", name)
+		if err := os.MkdirAll(sub, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		body := `kind = "remote"
+host = "192.0.2.1"
+user = "ops"
+password = "synthetic"
+`
+		if err := os.WriteFile(filepath.Join(sub, "config.toml"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// List always carries the built-in `internal` profile, which has no directory.
+	names, err := store.List()
+	if err != nil || len(names) != hosts+1 {
+		t.Fatalf("list = %d names, %v", len(names), err)
+	}
+
+	/* Each call may list each host at most ONCE. The regressions this pins were both
+	   "one extra full pass per host": a storage-mode lookup that scanned the host
+	   directory to find the name's spelling, and a load that asked the catalog after
+	   the directory had already answered. Either one doubles its number. */
+	store.dirReads.Store(0)
+	for _, name := range names {
+		if IsInternalName(name) {
+			continue
+		}
+		if _, _, err := store.LoadWithMode(name); err != nil {
+			t.Fatalf("load %s: %v", name, err)
+		}
+	}
+	if got := store.dirReads.Load(); got > int64(hosts) {
+		t.Errorf("loading %d hosts took %d directory listings; one per host is %d", hosts, got, hosts)
+	}
+
+	store.dirReads.Store(0)
+	for _, name := range names {
+		if IsInternalName(name) {
+			continue
+		}
+		if _, err := store.StorageMode(name); err != nil {
+			t.Fatalf("storage mode %s: %v", name, err)
+		}
+	}
+	if got := store.dirReads.Load(); got > int64(hosts) {
+		t.Errorf("asking the storage mode of %d hosts took %d directory listings; one per host is %d", hosts, got, hosts)
+	}
+}
 
 // The two properties that decide whether this feature can lose a profile are
 // asserted here by injecting the failure that matters, not by timing.
