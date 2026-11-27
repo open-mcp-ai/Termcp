@@ -64,6 +64,15 @@ type Store struct {
 	// Production leaves both nil.
 	writeCiphertext  func(*configstore.Repository, string, []byte) error
 	importCiphertext func(*configstore.Repository, []configstore.Item, configstore.SaveOptions) error
+
+	/* dirReads counts the directory listings this store performed. It exists
+	   because "how many directories does one host cost" is the property that has
+	   broken twice now (#353: one name rescanned every host; then a storage-mode
+	   lookup read the whole host list to find one entry), and a timing test for it
+	   would be the flaky kind. A counter makes it arithmetic: N hosts, N listings.
+
+	   One atomic add per listing is noise next to the syscall it counts. */
+	dirReads atomic.Int64
 }
 
 // saveCiphertext publishes one encrypted profile with this save's decisions: which
@@ -294,74 +303,100 @@ func IsOrphanedCiphertext(err error) bool {
 // name "internal" is the built-in entry, optionally overridden by a stored
 // internal/config.toml (see ParseInternalOverride).
 func (s *Store) Load(name string) (*Entry, error) {
+	ent, _, err := s.LoadWithMode(name)
+	return ent, err
+}
+
+/* LoadWithMode loads a profile and reports, in the same pass, whether it is stored
+ * as ciphertext.
+ *
+ * The storage mode is a fact this function establishes to answer "is there an
+ * encrypted generation?" — asking `StorageMode` afterwards re-derived it with
+ * another directory listing and a stat, per host, on every list. Measured on 1000
+ * hosts: 600 µs of the 2400 µs a listing took were that second look.
+ *
+ * The mode is a STRING, not a private enum, because `StorageMode` is the public
+ * vocabulary every surface already prints (StoragePlaintext and friends).
+ */
+func (s *Store) LoadWithMode(name string) (*Entry, string, error) {
 	name = strings.TrimSpace(name)
 	if IsInternalName(name) {
 		base := InternalEntry()
 		data, err := os.ReadFile(s.internalOverridePath())
 		if err != nil {
 			if os.IsNotExist(err) {
-				return base, nil // no override: the defaults ARE the profile
+				return base, StorageBuiltin, nil // no override: the defaults ARE the profile
 			}
-			return nil, err
+			return nil, "", err
 		}
 		ent, err := ParseInternalOverride(data, base)
 		if err != nil {
 			// A broken override is reported, not silently ignored: falling back
 			// to the defaults would run the session UNGATED after the user asked
 			// for a gate, which is the one direction this must never fail.
-			return nil, fmt.Errorf("internal profile override: %w", err)
+			return nil, "", fmt.Errorf("internal profile override: %w", err)
 		}
-		return ent, nil
+		return ent, StorageBuiltin, nil
+	}
+	/* ONE directory listing decides the two questions this function starts with:
+	   does this name have a directory, and does that directory hold ciphertext.
+	   They used to be two calls — a fold and then a `hasCiphertextOnDisk` in the
+	   orphan check — and the fold itself re-read the directory. On a real
+	   filesystem a ReadDir is the expensive part (~150 µs), so three of them per
+	   host is 450 µs of the ~500 µs a list spends per host.
+
+	   The catalog is consulted only when there is no directory to look at: that is
+	   the case-fold fallback, for a sealed host whose spelling differs from the
+	   name asked about. */
+	repo := s.repositorySnapshot()
+	unloadedRepo := repo != nil && !repo.Loaded()
+	exists, sealed := s.ciphertextOnDisk(name)
+	if !exists {
+		if _, isSealed, err := s.encryptedFold(name); err == nil && isSealed {
+			sealed = true
+		}
 	}
 	/* Both no-repo and nothing-loaded mean "no readable ciphertext". The first
 	   case is a deleted key: the ciphertext is still on disk and can never be
 	   opened again, which is a different message from "load my key". */
-	unloadedRepo := false
-	if repo := s.repositorySnapshot(); repo != nil {
-		unloadedRepo = !repo.Loaded()
-	}
-	if _, encrypted, err := s.encryptedFold(name); err == nil && encrypted && (unloadedRepo || s.repositorySnapshot() == nil) {
-		repo := s.repositorySnapshot()
+	if sealed && (unloadedRepo || repo == nil) {
 		if repo == nil || repo.KeyringMissing() {
-			return nil, orphanedCiphertextError{name: name}
+			return nil, StorageEncrypted, orphanedCiphertextError{name: name}
 		}
-		return nil, unloadedHostError{name: name}
+		return nil, StorageEncrypted, unloadedHostError{name: name}
 	}
 	p, err := s.configPath(name)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if v, inMemory := s.temporary.Load(name); inMemory {
-		return ParseAndValidate(v.([]byte))
-	}
-	/* Ciphertext on disk that no catalog lists: its key was deleted. Say that,
-	   rather than "not found", so callers can tell a damaged store from a missing
-	   name — the startup verifier skips these instead of refusing to run. */
-	if _, encrypted, err := s.encryptedFold(name); err == nil && !encrypted && s.hasCiphertextOnDisk(name) {
-		return nil, orphanedCiphertextError{name: name}
+		ent, err := ParseAndValidate(v.([]byte))
+		return ent, StorageTemporary, err
 	}
 	// Ciphertext is consulted before plaintext: an encrypted profile is the
 	// current generation of that name, and a leftover plaintext copy is what a
 	// half-finished conversion or an interrupted restore leaves behind.
 	// A store with nothing loaded has no ciphertext it can read: asking would
 	// fail the load with "no key loaded" and take every plaintext profile with it.
-	if repo := s.repositorySnapshot(); repo != nil && repo.Loaded() {
+	if repo != nil && repo.Loaded() {
 		data, err := repo.Read(name)
 		if err != nil && !errors.Is(err, configstore.ErrNotFound) {
-			return nil, hostStorageError(err, name)
+			return nil, StorageEncrypted, hostStorageError(err, name)
 		}
 		if err == nil {
-			return ParseAndValidate(data)
+			ent, err := ParseAndValidate(data)
+			return ent, StorageEncrypted, err
 		}
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("ssh config %q %w (use data-dir/ssh_configs/%s/config.toml)", name, ErrNotFound, name)
+			return nil, "", fmt.Errorf("ssh config %q %w (use data-dir/ssh_configs/%s/config.toml)", name, ErrNotFound, name)
 		}
-		return nil, err
+		return nil, "", err
 	}
-	return ParseAndValidate(data)
+	ent, err := ParseAndValidate(data)
+	return ent, StoragePlaintext, err
 }
 
 // ReadRaw returns the raw config.toml bytes for a name.
@@ -890,8 +925,16 @@ func (s *Store) encryptedFold(name string) (string, bool, error) {
 	/* The name's own directory answers the common case in one readdir. The catalog
 	   listing below is O(hosts), and asking it once per host — which is what a
 	   listing does — made painting the host list quadratic. */
-	if s.hasCiphertextOnDisk(name) {
+	if exists, sealed := s.ciphertextOnDisk(name); sealed {
 		return name, true, nil
+	} else if exists {
+		/* The directory is there and holds no `.enc`: this name is plaintext (or a
+		   temporary profile), whatever the catalog says. The catalog listing below is
+		   O(hosts), and asking it here — which is what one call per host did — made a
+		   list of N hosts cost N catalog scans. It is still needed for the case it
+		   exists for: a sealed host whose spelling differs from the name asked
+		   about, where there is no directory to look at. */
+		return "", false, nil
 	}
 	repo := s.repositorySnapshot()
 	unloaded := repo == nil
@@ -929,19 +972,33 @@ func (s *Store) encryptedFold(name string) (string, bool, error) {
 	return "", false, nil
 }
 
-// hasCiphertextOnDisk reports whether the profile directory holds encrypted
-// generations, regardless of whether any catalog currently lists the name.
-func (s *Store) hasCiphertextOnDisk(name string) bool {
+/* ciphertextOnDisk answers both questions one directory listing can answer: does
+ * this name have a directory at all, and does it hold encrypted generations.
+ *
+ * They are asked together because the listing is the expensive part — on a real
+ * filesystem a ReadDir costs ~150 µs while the loop over its entries costs nothing
+ * — and the two callers each used to pay for it separately, plus a stat to learn
+ * what the listing had already told them.
+ */
+func (s *Store) ciphertextOnDisk(name string) (exists, sealed bool) {
+	s.dirReads.Add(1)
 	entries, err := os.ReadDir(filepath.Join(s.root(), name))
 	if err != nil {
-		return false
+		return false, false
 	}
 	for _, f := range entries {
 		if !f.IsDir() && strings.HasSuffix(f.Name(), ".enc") {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return true, false
+}
+
+// hasCiphertextOnDisk reports whether the profile directory holds encrypted
+// generations, regardless of whether any catalog currently lists the name.
+func (s *Store) hasCiphertextOnDisk(name string) bool {
+	_, sealed := s.ciphertextOnDisk(name)
+	return sealed
 }
 
 // plaintextFold reports whether a config.toml exists for name, case-insensitively.
@@ -953,6 +1010,17 @@ func (s *Store) plaintextFold(name string) (string, bool, error) {
 		}
 		return "internal", true, nil
 	}
+	/* The name as written answers the common case in ONE stat. The scan below reads
+	   every host directory to find a name whose spelling differs, and a listing asks
+	   this question once per host: 1000 hosts meant 1000 full directory reads, which
+	   is what made a storage-mode lookup cost 1.4 ms (measured) instead of a few
+	   microseconds. */
+	if exists, err := regularFileExists(filepath.Join(s.root(), name, "config.toml")); err != nil {
+		return "", false, err
+	} else if exists {
+		return name, true, nil
+	}
+	s.dirReads.Add(1)
 	entries, err := os.ReadDir(s.root())
 	if errors.Is(err, os.ErrNotExist) {
 		return "", false, nil

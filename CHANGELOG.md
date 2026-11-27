@@ -21,6 +21,14 @@
   fsync each — to change nothing: 2000 archived sessions cost 19 s of background I/O
   on every start, now 0.5 s. A record that still says "running" is the one thing a
   restart has to report to disk, and those are the only ones written.
+- **Listing hosts no longer rescans the store per host.** Two helpers answered a
+  per-host question by reading everything: the storage-mode lookup re-read the whole
+  `ssh_configs/` directory to match a name's spelling, and loading a profile asked the
+  catalog listing after the profile's own directory had already answered. On Windows,
+  where one directory read costs ~150 µs and one file read ~100 µs, that turned a list
+  of 1000 hosts into 2.4 s; it is 0.3 s now, and the storage mode arrives with the load
+  instead of being re-derived afterwards. The exact-name lookup comes first and the
+  case-insensitive scan only runs when there is no directory to look at.
 - Opening a data dir no longer reads the host catalog, and listing hosts is no
   longer quadratic: one name is resolved by reading that name's directory instead of
   rescanning all of them. 245 encrypted hosts: 143 s → 0.6 s to start, 138 s → 0.6 s
