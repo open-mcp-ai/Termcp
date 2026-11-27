@@ -131,6 +131,10 @@
 
 ### Fixed
 
+- A Windows-path spelling failure now puts the working spelling on its FIRST line
+  (#357 §1.5): the advice used to be appended after the server's error text, so a caller
+  skimming the top of a log concluded the file name was bad. It is still only offered on
+  a generic failure — a 404 or 403 is a verdict about a path the server could resolve.
 - Background archive restore (#353): `core.New` no longer blocks port binding by
   loading every archived session manifest before `Listen`. `Start` launches the walk
   in the background — reading one session directory at a time instead of holding
