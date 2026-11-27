@@ -649,7 +649,14 @@ commits all selected ciphertext objects and the catalog before removing their
 plaintext `config.toml` files — and, for a key that carries a passphrase, writes each
 host's `.adk` and leaves the hosts active, because the person creating them is
 present (that passphrase is the "type it once while setting up" moment). A missing
-passphrase for such a key answers `409 passphrase_required`. Restore writes an atomic
+passphrase for such a key answers `409 passphrase_required`, and one that does not
+open a host the key already seals answers `400 passphrase_incorrect` — the seal
+proves the passphrase first. A key keeps no verifier of its own, because a stored one
+would be an offline oracle for guessing; the hosts it seals are the verifier, each
+with its own salt. A key that seals nothing yet has nothing to compare against, and
+that first sealing defines the passphrase. Without this check a typo was not a
+refusal but a silent redefinition: the new host answered to the typo while its
+siblings stayed sealed to the real passphrase. Restore writes an atomic
 plaintext file first, then removes the encrypted catalog entry, and needs an active
 host: an inactive or orphaned one cannot be read, so it cannot be restored. Temporary
 profiles cannot be converted. These routes use the instance's existing HTTP

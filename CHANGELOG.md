@@ -44,6 +44,19 @@
   host names its key explicitly. Plugging in a key, activating a host and showing
   the words are human-only actions — an agent request is refused even with a valid
   token.
+- **A wrong passphrase is refused, and it is said where it was asked.** Sealing a host
+  to a key that carries a passphrase proved nothing, so a typo did not fail: it sealed
+  that host to the typo, answered 200, and left the key's other hosts sealed to the
+  real passphrase. The store now verifies the passphrase against a host the key already
+  seals (each host's own salt is the verifier; a stored one would be an offline oracle)
+  and answers `400 passphrase_incorrect` with nothing written. Setup is unchanged for
+  the first host, which is the sealing that defines the passphrase.
+- The dialogs that ask for a passphrase now answer in place. Loading a key keeps its box
+  open when the passphrase is wrong, with the reason under the field and the input
+  selected for the retype; activating does the same instead of closing and writing the
+  reason into the keychain panel, which is not open when the action starts from a card.
+  Any failure raised from a card while the panel is closed is reported as a toast —
+  before, it went only into a panel that was not on screen.
 - **Loading a key can activate its hosts in the same answer.** A key that carries a
   passphrase asks for it once and spends it on both layers: the words go into memory and
   every host that key seals becomes readable. A wrong passphrase rolls the load back, so

@@ -93,6 +93,48 @@ func TestFailedOverwriteKeepsTheLeftoverPlaintextCopy(t *testing.T) {
 	}
 }
 
+/* The panel's "lock this host" path proves the passphrase before it seals.
+ *
+ * The store can only check what a key already seals, and this is the layer that
+ * supplies the passphrase, so the flag has to be set HERE: without it a typo sealed
+ * the host to the typo and the request answered 200.
+ *
+ * Mutation check: drop VerifyPassphrase from the save options this function builds
+ * and this fails with a nil error.
+ */
+func TestLockingAHostProvesTheKeysPassphrase(t *testing.T) {
+	const passphrase = "synthetic passphrase for the lock test"
+	store, repo, dir := newEncryptingStore(t)
+	writePlaintextProfile(t, store, "first", safetyProfile)
+	if _, err := store.EncryptProfiles([]string{"first"}, configstore.ID{}, ""); err != nil {
+		t.Fatalf("sealing the first host: %v", err)
+	}
+	keys, err := repo.Keys()
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("keychain = %+v, %v", keys, err)
+	}
+	var id configstore.ID
+	if err := id.UnmarshalText([]byte(keys[0].ID)); err != nil {
+		t.Fatal(err)
+	}
+	// The key gets a passphrase and re-seals the host it already has, so "what this
+	// key seals" exists for the next host to be checked against.
+	if err := repo.ChangePassphrase(id, "", passphrase); err != nil {
+		t.Fatalf("give the key a passphrase: %v", err)
+	}
+
+	writePlaintextProfile(t, store, "second", safetyProfile)
+	if _, err := store.EncryptProfiles([]string{"second"}, id, "not the passphrase"); !errors.Is(err, configstore.ErrPassphraseWrong) {
+		t.Fatalf("locking with a wrong passphrase = %v; want ErrPassphraseWrong", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "ssh_configs", "second", "config.toml")); statErr != nil {
+		t.Fatal("the refused lock removed the plaintext profile")
+	}
+	if _, err := store.EncryptProfiles([]string{"second"}, id, passphrase); err != nil {
+		t.Fatalf("locking with the key's own passphrase: %v", err)
+	}
+}
+
 // A store that must encrypt but has no usable keyring refuses the write. Falling
 // back to plaintext would put credentials in cleartext exactly when the operator
 // asked for the opposite.

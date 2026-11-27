@@ -124,6 +124,51 @@ func (r *Repository) activationForSave(ref catalogRef, keyID ID, key storedKey, 
 	return existing, true, record, nil
 }
 
+/* verifyPassphrase proves a passphrase against something this key already sealed.
+ *
+ * A key that carries a passphrase keeps no verifier for it, and that is deliberate:
+ * a stored verifier is an offline oracle for guessing. The sealed hosts are the
+ * verifier instead — each has its own salt, and opening its `.adk` proves the
+ * passphrase without writing anything. A key with no sealed host yet has nothing to
+ * compare against, and the first sealing defines the passphrase.
+ *
+ * Called by a save that is establishing a NEW sealing (VerifyPassphrase); changing a
+ * passphrase goes the other way, away from every record on disk.
+ */
+func (r *Repository) verifyPassphrase(keyID ID, passphrase string) error {
+	cur := r.snap()
+	checked := 0
+	for _, name := range r.hostsForKey(keyID, 0) {
+		ref, ok := cur.refs[name]
+		if !ok {
+			continue
+		}
+		record, err := r.readActivation(ref)
+		if err != nil {
+			/* A host with no record cannot prove anything; the next one may. */
+			continue
+		}
+		raw, err := r.readObjectRaw(ref)
+		if err != nil {
+			continue
+		}
+		checked++
+		activationKey, err := DeriveActivationKey(passphrase, record.salt, record.parameters)
+		if err != nil {
+			return err
+		}
+		err = record.verify(activationKey, raw[envelopeHeaderSize:])
+		clear(activationKey[:])
+		if err == nil {
+			return nil
+		}
+	}
+	if checked == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: key %s", ErrPassphraseWrong, shortID(keyID))
+}
+
 func newActivationSalt() ([16]byte, error) {
 	var salt [16]byte
 	if _, err := io.ReadFull(rand.Reader, salt[:]); err != nil {
