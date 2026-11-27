@@ -2488,6 +2488,9 @@ Response 200:
 ```
 
 <!-- BEGIN termdoc: args -->
+| `run` | Execute one shell line verbatim without DSL parsing, placeholders, or flags. Pair with `session` (one-shot pipe returning exit_code) or `shell` (existing interactive shell). Mutually exclusive with `cmd` |
+| `session` | Target session id, channel (uses its session), or `use:<host>` for `run`: runs the line in a fresh pipe and returns `exit_code` + stdout. Mutually exclusive with `shell` |
+| `shell` | Existing channel for `run` (e.g. `6a29:1`): types the line into that interactive shell so `cd`/env state persists (no `exit_code`). Mutually exclusive with `session` |
 | `cmd` | Empty or omitted returns the guide (where am I, what can I do, what is here) — never an error. A `cmd` that is present but not a string is a 400: a command that was sent and did not survive the transport is not the same request as one never sent |
 | `encoding` | The default charset for reads in this call, as `read --encoding` sets per statement. A byte that is not UTF-8 refuses the whole reply otherwise, which is the one thing a caller cannot work around from outside |
 | `timeout` | Seconds to look (default 2; a pipe returns as soon as its process exits). 60 is the wait to stay under, not a wall: a longer window is allowed, and the reply says how long it waited. An upper bound on waiting, not a completion wait |

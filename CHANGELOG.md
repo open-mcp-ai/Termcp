@@ -176,6 +176,14 @@
 - **标题栏就是控制行**：反选勾选框与四个钥匙操作都在标题右边。它们原来待的那一行会按钥匙数量收起，于是空钥匙链——新装第一次打开就是这个状态——没有任何可点的东西。现在面板只有标题栏、列表，以及列表足够长时才出现的筛选框。**勾选的颜色也回到主题画布色**：对话框里给文本框写的规则曾把勾画成正文颜色，于是浅色主题是深色勾、深色主题是浅色勾；四个主题实测勾色现在等于各自的 `--bg-canvas`。
 ### Added
 
+- `run`: one shell line, no DSL (#319). `{"run": "df -h", "session": "6a29"}` opens a
+  one-shot pipe and answers with `exit_code` + stdout; `{"run": "cd /srv", "shell":
+  "6a29:1"}` types into an existing interactive shell and keeps its state. The line is
+  handed over verbatim — `;`, `|`, `&&`, quotes and `$()` belong to the shell — so the
+  DSL's ambiguity classes cannot arise. `session`/`shell` are alternatives and `cmd`+`run`
+  together is refused. The three arguments cost nothing extra: the schema's prose was
+  tightened to stay inside the 2500 B budget (2476 B).
+
 - `get ext` reports reconciliation fields beside the status word: `liveness` (a probe
   taken at reply time — `alive` read from the channel's own transport, `checked_at`,
   `session_status`, `exit_code` once it exits, and `pid_unknown` naming why no pid is
@@ -250,6 +258,7 @@
   consumes the peer's own methods, so all this had to do was not swallow them. The
   reader also renews the extension's idle clock, so a subscriber keeps a lazily-started
   peer alive between events.
+
   peer alive between events. The version the endpoint reports is the peer's own
   (`Mcp-Protocol-Version` from its `initialize` answer), not this build's constant, and
   the answer window is five minutes: it is the backstop for a peer that never answers,
@@ -279,6 +288,7 @@
   besides `bytes_written` the reply carries `line` and a one-line `diff` (`L2: -
   timeout = 5 | + timeout = 30`). Checking an edit no longer means reading the file
   back — the exact-replace primitive exists to avoid paying for the whole file.
+
 ### Fixed
 
 - A reply no longer claims bytes it did not deliver (#269 #1): an empty window answered
