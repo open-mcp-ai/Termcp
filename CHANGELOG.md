@@ -4,6 +4,14 @@
 
 ### Added
 
+- `get ext` reports reconciliation fields beside the status word: `liveness` (a probe
+  taken at reply time — `alive` read from the channel's own transport, `checked_at`,
+  `session_status`, `exit_code` once it exits, and `pid_unknown` naming why no pid is
+  claimed: the process runs on the target host and SSH carries none), `restarts` (how
+  many times it came back up after going down, counted on the transition, not on every
+  bring-up) and `last_active_at`. A status string is the reconciler's belief; these are
+  measurements, and a closed channel now says it closed rather than reading as one that
+  never had a process.
 - Drive-prefixed Windows paths written with backslashes (`C:\tc\a.txt`,
   `/C:\tc\a.txt`) are rewritten to the POSIX wire form (`/C:/tc/a.txt`) before
   whitelist checks and file operations across `term`, file tools, `read … | write …`

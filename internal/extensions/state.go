@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/clock"
+	"github.com/open-mcp-ai/termcp/internal/session"
 )
 
 // extState is the mutable runtime half of one extension. Every field behind its
@@ -34,6 +35,13 @@ type extState struct {
 	lazy      bool
 	idleLimit time.Duration
 	lastUse   time.Time
+
+	// restarts counts the times this extension came back up AFTER going down, and
+	// downSince marks that it is currently down (issue #325). Counting recoveries
+	// needs both: a bring-up while it was already up is a reuse, not a restart, and
+	// counting every bring-up would turn "asked for twice" into "restarted once".
+	restarts  int
+	downSince bool
 
 	// What was taken away, for a caller still holding the handle: "not found" is
 	// true and useless where "this was closed at 14:02 because it was idle for 10m"
@@ -620,9 +628,22 @@ func (st *extState) detachFrom(sessionID string) bool {
 	return true
 }
 
-// mark sets the status.
+// mark sets the status, and counts a recovery when one happens (issue #325).
+//
+// THE COUNTER MOVES ON THE TRANSITION OUT OF `unavailable`, which is the only moment
+// that means "it was down and now it is up". Counting at bring-up time instead would
+// also count a caller's second `open` of a healthy extension, and a number that goes up
+// when nothing restarted is worse than no number.
 func (st *extState) mark(status string) {
 	st.mu.Lock()
+	// `downSince` ALONE DECIDES, not the status field: a tunnel failure records the
+	// failure without flipping the published status (the endpoint is still answering),
+	// and a recovery after that is still a recovery. Requiring status != available here
+	// made the counter miss exactly that case — measured, not assumed.
+	if status == StatusAvailable && st.downSince {
+		st.restarts++
+		st.downSince = false
+	}
 	st.status = status
 	st.mu.Unlock()
 }
@@ -746,6 +767,11 @@ func (st *extState) lastStage() string {
 func (st *extState) recordFailure(stage, reason string) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	// EVERY FAILURE MEANS THE EXTENSION IS DOWN, which is what a later successful
+	// bring-up counts as a restart (issue #325). Set here rather than in fail(): a
+	// tunnel failure and a channel failure both go through this path, and a restart
+	// after either is a restart.
+	st.downSince = true
 	st.recordFailureLocked(stage, reason)
 }
 
@@ -787,6 +813,57 @@ func (st *extState) recordFailureViaLocked(stage, reason, via string) {
 	st.consecutive++
 }
 
+// probeLiveness MEASURES whether the extension's process is still there (issue #325).
+//
+// IT TAKES THE HANDLES UNDER THE LOCK AND LOOKS THEM UP OUTSIDE IT, because the lookup
+// reaches into the session manager and a probe must never hold this state's mutex while
+// calling into another subsystem (AGENTS.md: a lock inside a cross-component call is how
+// two independent locks become one deadlock).
+//
+// A DEAD CHANNEL IS REPORTED, NOT CORRECTED. The reconciler's reaper owns the transition
+// to unavailable; a read path that flipped the status would race the walk and could
+// publish "down" for a channel that came back between the two.
+func (st *extState) probeLiveness(lookup func(string) *session.ChildShell, sessionStatus func(string) string) *Liveness {
+	st.mu.Lock()
+	shellID, sessionID := st.shellID, st.sessionID
+	closedShellID, closedReason := st.closedShellID, st.closedReason
+	if shellID == "" && len(st.extra) > 0 {
+		shellID = st.extra[len(st.extra)-1].shellID
+		sessionID = st.extra[len(st.extra)-1].sessionID
+	}
+	st.mu.Unlock()
+
+	out := &Liveness{CheckedAt: time.Now().UnixMilli()}
+	if shellID == "" {
+		if sessionID != "" {
+			out.SessionStatus = sessionStatus(sessionID)
+		}
+		// "THE CHANNEL DIED" AND "THERE NEVER WAS ONE" ARE DIFFERENT ANSWERS, and a
+		// probe that said the second about the first would be the same class of silence
+		// this field exists to remove. A read-only template really has no process; an
+		// extension whose channel closed has one that is gone, and the reason it went is
+		// worth more than the distinction.
+		if closedShellID != "" {
+			out.PidUnknown = "the channel this extension ran on has closed (" + closedReason + "); there is no process left to name"
+		} else {
+			out.PidUnknown = "this template declares no shell: it is served by its connection, so there is no channel process to name"
+		}
+		return out
+	}
+	out.SessionStatus = sessionStatus(sessionID)
+	if cs := lookup(shellID); cs != nil {
+		out.Alive = cs.Alive()
+		if code := cs.ExitCode(); code != nil {
+			out.ExitCode = code
+		}
+	}
+	// THE PID IS NOT AVAILABLE OVER SSH, and saying so is the honest answer: the child
+	// runs on the target host and the protocol has no field for its pid, so a number
+	// here could only be this daemon's own — a value a caller can check and find wrong.
+	out.PidUnknown = "the channel runs on the target host over SSH; the protocol does not carry its pid. `alive` is measured from the channel's own transport"
+	return out
+}
+
 func (st *extState) snapshot() Status {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -815,6 +892,12 @@ func (st *extState) snapshot() Status {
 	}
 	if out.SessionID == "" && len(st.extra) > 0 {
 		out.SessionID = st.extra[len(st.extra)-1].sessionID
+	}
+	// BOTH ARE READ UNDER THE SAME LOCK AS THE REST OF THE ROW, so the reply cannot
+	// describe a restart count from one moment and a last-use time from another.
+	out.Restarts = st.restarts
+	if !st.lastUse.IsZero() {
+		out.LastActiveAt = st.lastUse.UnixMilli()
 	}
 	if st.lazy {
 		out.IdleTimeoutMs = st.idleLimit.Milliseconds()
