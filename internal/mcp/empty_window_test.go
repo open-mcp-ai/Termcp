@@ -61,6 +61,12 @@ func TestOutputArrivingAfterTheWindowIsStillReadable(t *testing.T) {
 	s := newTestServer(t)
 	h := openPty(t, s)
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
+	// WITHOUT THIS THE TEST IS ABOUT A DISCARDED LINE, NOT A LATE ONE. A pty that is
+	// still starting throws away what is typed into it, so the command never runs and the
+	// poll below waits ten seconds for output that was never produced — measured: the
+	// shuffle+race run answered `bytes */26`, a transcript holding only the startup
+	// banner. The sibling test above establishes the same precondition for the same reason.
+	awaitPtyReady(t, s, h)
 
 	termText(t, s, map[string]any{
 		"cmd":     "run " + h + " $1",
@@ -94,10 +100,10 @@ func TestAFoldedWindowStillReportsItsRange(t *testing.T) {
 		"timeout": 2,
 	})
 	got := termText(t, s, map[string]any{
-		"cmd":              "read " + h + " --offset 0",
-		"bytes_limit":      5,
+		"cmd":               "read " + h + " --offset 0",
+		"bytes_limit":       5,
 		"on_bytes_overflow": "fold",
-		"timeout":          2,
+		"timeout":           2,
 	})
 	if !strings.Contains(got, "Folded:") {
 		t.Fatalf("a folded window does not name the span it withheld:\n%s", got)
