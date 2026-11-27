@@ -599,6 +599,14 @@ func (m *Manager) RestoreDead() error {
 	if err != nil {
 		return err
 	}
+	/* Only the records this restore actually corrected are written back. The loop
+	   below turns a "running" record into EXITED — the process that claimed to hold
+	   an SSH connection is gone, so nothing else can be true — and that correction is
+	   the only thing restore has to say to disk. Persisting the whole list rewrote
+	   every archived manifest and every shell beneath it, with an fsync each, to
+	   change nothing: 2000 archived sessions cost 19 s of background I/O that the
+	   next restart repeated. */
+	corrected := make([]api.Session, 0)
 	for _, meta := range list {
 		if _, ok := m.sessions.Load(meta.ID); ok {
 			continue
@@ -607,6 +615,7 @@ func (m *Manager) RestoreDead() error {
 		// "running" is really DEAD; never advertise a fake live tile.
 		if meta.Status == api.SessionRunning {
 			meta.Status = api.SessionExited
+			corrected = append(corrected, meta)
 		}
 		s := &Session{Session: meta, scope: newResourceScope()}
 		// Restored sessions never start a process, but they can still be deleted;
@@ -634,7 +643,9 @@ func (m *Manager) RestoreDead() error {
 		m.sessions.Store(meta.ID, s)
 		m.slogf("restored DEAD session", meta.ID)
 	}
-	m.persist(m.ListAll())
+	if len(corrected) > 0 {
+		m.persist(corrected)
+	}
 	m.notifyListChange()
 	return nil
 }

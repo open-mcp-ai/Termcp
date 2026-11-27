@@ -16,6 +16,11 @@
   first and the history is restored behind it; `GET /api/daemon` publishes
   `"restoring": true` while that is in progress, so "not up yet" and "up, still
   loading" are distinguishable without watching a clock (#353).
+- Restoring yesterday's sessions writes back only the records it corrected. It used
+  to persist the whole list — every archived manifest and every shell under it, one
+  fsync each — to change nothing: 2000 archived sessions cost 19 s of background I/O
+  on every start, now 0.5 s. A record that still says "running" is the one thing a
+  restart has to report to disk, and those are the only ones written.
 - Opening a data dir no longer reads the host catalog, and listing hosts is no
   longer quadratic: one name is resolved by reading that name's directory instead of
   rescanning all of them. 245 encrypted hosts: 143 s → 0.6 s to start, 138 s → 0.6 s

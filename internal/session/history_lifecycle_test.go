@@ -14,6 +14,67 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
+/* Restoring yesterday's sessions writes back only what it corrected.
+ *
+ * The correction is real — a record that says "running" was left by a process that
+ * no longer holds the SSH connection — but it is the ONLY thing restore has to say
+ * to disk. Persisting the whole list rewrote every archived manifest and every shell
+ * under it, with an fsync each, to change nothing: 2000 archived sessions cost 19 s
+ * of background I/O on every start.
+ *
+ * Mutation check: restore `m.persist(m.ListAll())` and the untouched session's
+ * manifest is rewritten (its modification time moves) and this fails by name.
+ */
+func TestRestoringSessionsOnlyRewritesWhatItCorrected(t *testing.T) {
+	dir := t.TempDir()
+	// Two stores over one directory, because that is what a restart is. The first
+	// writes the manifests (and remembers their hashes); the second restores them
+	// with an empty cache, so ANY write during the restore shows up as a new mtime.
+	writer := storage.New(dir)
+	running := api.Session{ID: "was-running", Name: "was-running", Command: "bash",
+		Status: api.SessionRunning, CreatedAt: 1, UpdatedAt: 1, Rows: 40, Cols: 120}
+	archived := api.Session{ID: "was-archived", Name: "was-archived", Command: "bash",
+		Status: api.SessionExited, CreatedAt: 1, UpdatedAt: 1, Rows: 40, Cols: 120}
+	for _, sess := range []api.Session{running, archived} {
+		if err := writer.SaveSession(sess); err != nil {
+			t.Fatalf("save %s: %v", sess.ID, err)
+		}
+	}
+	// An old, fixed modification time: anything rewritten during the restore gets a
+	// newer one, which is how "did this file change" is asked without a clock race.
+	old := time.Now().Add(-time.Hour)
+	stamps := map[string]time.Time{}
+	for _, id := range []string{"was-running", "was-archived"} {
+		path := filepath.Join(dir, "sessions", id, "manifest.json")
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatalf("age %s: %v", id, err)
+		}
+		stamps[id] = old
+	}
+
+	restored := NewManager(nil, storage.New(dir), nil)
+	if err := restored.RestoreDead(); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+
+	if sess := restored.Get("was-running"); sess == nil || sess.Info().Status != api.SessionExited {
+		t.Fatalf("the running record was not corrected: %+v", sess)
+	}
+	moved := func(id string) bool {
+		info, err := os.Stat(filepath.Join(dir, "sessions", id, "manifest.json"))
+		if err != nil {
+			t.Fatalf("stat %s: %v", id, err)
+		}
+		return info.ModTime().After(stamps[id])
+	}
+	if !moved("was-running") {
+		t.Error("the corrected session was not written back")
+	}
+	if moved("was-archived") {
+		t.Error("an archived session was rewritten to change nothing")
+	}
+}
+
 // Terminate / Disconnect must NOT delete the session from the registry: it
 // becomes a retained DEAD (exited) session whose byte log stays on disk
 // for read-only replay. The tile stays visible and its output remains readable.
