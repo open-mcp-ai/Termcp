@@ -118,11 +118,12 @@ var ops = []Op{
 		Detail:    lsDetail},
 	{Name: "get", Core: true, Kind: KindFlags, Target: true,
 		Kinds: []string{"file", "host", "ext", "protocol", "cdp", "mcp", "jrpc", "task"},
-		Flags: []string{"op", "all"},
+		// --offset/--length narrow `--op sha256` to a byte range (#357 §1.4).
+		Flags: []string{"op", "all", "offset:number", "length:number"},
 		// `get <s> cdp:1 protocol <Domain>` and `get <s> mcp:1 tools <name>`: the
 		// word after the key is a NAME the peer understands, not grammar of ours.
 		DataArgs: 1,
-		Usage:    "get <session|channel|host-name>   |   get host <name>   |   get ext <name>   |   get task <id>   |   get <session> file <path> [--op stat|realpath|urls|…]   |   get <session> cdp[:N][@target] [protocol [Domain]]",
+		Usage:    "get <session|channel|host-name>   |   get host <name>   |   get ext <name>   |   get task <id>   |   get <session> file <path> [--op stat|realpath|urls|sha256|…]   |   get <session> cdp[:N][@target] [protocol [Domain]]",
 		Detail:   getDetail},
 	{Name: "close", Core: true, Kind: KindFlags, Target: true, NoPositional: true,
 		// mcp/cdp/jrpc/file are DECLARED SO THEY ARE REFUSED BY NAME. Dropping them
@@ -219,8 +220,8 @@ var ops = []Op{
 			// --recursive IS THE SWITCH THAT MAKES A DIRECTORY TARGET LEGAL (#340), and
 			// --dry-run is its cautious half. Without the switch a directory target is
 			// refused by name rather than opened as a file.
-			"recursive", "dry-run"},
-		Valueless: []string{"recursive", "dry-run"},
+			"recursive", "dry-run", "verify"},
+		Valueless: []string{"recursive", "dry-run", "verify"},
 		Usage:     "write <session> file <path> [--data TEXT] [--mode …] [--op chmod|truncate|…]",
 		Detail:    writeDetail},
 
@@ -1101,6 +1102,14 @@ output it still has.`
 
 const getDetail = `Describe one node: a session, one of its channels, or a peer.
 
+--op sha256 HASHES THE BYTES ON THE HOST (#357): get <session> file <path> --op
+sha256 [--offset N] [--length N] answers with the digest, the byte count it covered
+and the path, streamed rather than read into memory — the question "is the file over
+there the file I have" answered in one call instead of by comparing lengths, which is
+the one fact a truncated copy preserves. It needs file.read as well as the filesystem
+capability: a digest is content, one whole file at a time, so a session that may
+truncate a file must not be able to recognise its contents by hash.
+
   get a1f3              status, endpoint, mode, age, and why it ended
   get a1f3:1            that channel's state
   get a1f3 cdp:1            the connection: endpoint, frame cursor, attached tabs
@@ -1275,6 +1284,14 @@ spelling.
 
 A RELATIVE path is resolved by the server against its own working directory, not yours,
 and there is no way to ask the wire for the caller's cwd: name the absolute path.
+
+--verify MAKES THE FAR SIDE ANSWER (#357). The receipt already carries the sha256 of
+the bytes that were sent; --verify reads them back and compares, so "the copy arrived
+intact" stops being an assumption. The comparison covers the range that was written, so
+a --offset write verifies its own block rather than the whole file, and the hash is
+streamed on the host side — verifying a 2 GB file costs no memory here. A mismatch is
+NOT a 200: the bytes are already on the host, so the refusal says the file's contents
+are unknown rather than absent. --recursive --verify checks every file it writes.
 
 A PIPELINE IS A TRANSFER AND ANSWERS 202 WITH A RECEIPT. Moving a file between nodes
 (including from the daemon host via the internal session) takes as long as the link

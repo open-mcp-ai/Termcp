@@ -189,6 +189,17 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 			}
 			return []envelope.Slot{s.extStdioToolList(ctx, stmt, stmt.Target, win, tool)}
 		}
+		// `--offset`/`--length` ON `get` BELONG TO `--op sha256` ONLY: accepting them on
+		// `get <session>` or `--op stat` and dropping them would answer a different
+		// question than the one asked.
+		if stmt.Kind != "file" || func() string { op, _ := stmt.Flag("op"); return op }() != "sha256" {
+			for _, f := range []string{"offset", "length"} {
+				if stmt.FlagState(f) != directive.FlagAbsent {
+					return []envelope.Slot{badRequest(stmt, "`--"+f+"` on `get` only applies to `get <session> file <path> --op sha256`, "+
+						"where it bounds the byte range hashed. For reading a range of bytes use `read <session> file <path> --offset …`.")}
+				}
+			}
+		}
 		if stmt.Kind == "file" {
 			// --op names a SUB-ACTION; the sfTP layer groups those under an action
 			// (perm, link, fs) and dispatches again inside the group. The group is
@@ -204,7 +215,7 @@ func (s *Server) runDirective(ctx context.Context, stmt directive.Statement, win
 			action, ok := fileGroupForOp(op)
 			if !ok {
 				return []envelope.Slot{badRequest(stmt, "get --op does not know "+quoteOrDash(op)+
-					". It takes stat, realpath, readlink, getwd, urls, or one of: chmod, chown, chtimes, truncate, statvfs.")}
+					". It takes stat, realpath, readlink, getwd, urls, sha256, or one of: chmod, chown, chtimes, truncate, statvfs.")}
 			}
 			return []envelope.Slot{s.directiveFile(ctx, withFlags(stmt, map[string]string{
 				"action": action, "op": op, "remote-path": stmt.Key,
@@ -993,7 +1004,9 @@ func fileGroupForOp(op string) (string, bool) {
 		// and both live on `create … file`, where the node's key is the link and --target
 		// is what it points at.
 		return "link", true
-	case "truncate", "realpath", "statvfs":
+	case "truncate", "realpath", "statvfs", "sha256":
+		// sha256 is a READ of the bytes, grouped with the other byte-level facts about a
+		// path rather than with `read`, which returns content (#357 §1.4).
 		return "fs", true
 	}
 	return "", false

@@ -176,6 +176,14 @@
 - **标题栏就是控制行**：反选勾选框与四个钥匙操作都在标题右边。它们原来待的那一行会按钥匙数量收起，于是空钥匙链——新装第一次打开就是这个状态——没有任何可点的东西。现在面板只有标题栏、列表，以及列表足够长时才出现的筛选框。**勾选的颜色也回到主题画布色**：对话框里给文本框写的规则曾把勾画成正文颜色，于是浅色主题是深色勾、深色主题是浅色勾；四个主题实测勾色现在等于各自的 `--bg-canvas`。
 ### Added
 
+- A write can now prove itself and a file can be identified by content (#357 §1.4):
+  `write … --verify` reads the bytes back and compares their SHA256 to the one it just
+  computed (over the written range, so an `--offset` write verifies its own block),
+  `--recursive --verify` checks every file, and `get <session> file <path> --op sha256
+  [--offset N] [--length N]` hashes on the host without pulling the file into memory.
+  A mismatch is a failure with both digests named, not a 200: the bytes are already
+  there, so the reply says the contents are unknown rather than absent. The hash op
+  needs `file.read` as well as the filesystem capability — a digest is content.
 - Cross-file `grep`/`find` on `read … file` (#357 §1.1): `--grep RE` now filters a
   FILE (it parsed and was silently dropped — the whole file came back) and searches a
   DIRECTORY, answering `path:line:text` with `--glob`/`--context`/`--grep-limit` and a

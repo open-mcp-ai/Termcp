@@ -825,6 +825,17 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 	if slot, refused := s.refuseAction(ctx, stmt, capID); refused {
 		return slot
 	}
+	// `--op sha256` IS NOT A stat: it reveals the CONTENT of a file one whole-file hash at
+	// a time, so a session granted `file_fs` (which can empty or truncate a file) must not
+	// get it without `file_read` as well. The pair is asked for in the same place the
+	// capability was chosen, so the gate cannot be forgotten by a new op in the same group.
+	if action == "fs" {
+		if op, _ := stmt.Flag("op"); op == "sha256" {
+			if slot, refused := s.refuseAction(ctx, stmt, capability.FileRead); refused {
+				return slot
+			}
+		}
+	}
 
 	args := argsOf("session_id", stmt.Target)
 	if slot, bad := stringFlags(args, stmt,
@@ -885,6 +896,11 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 	}
 	if boolFlag(stmt, "dry-run") {
 		args["dry_run"] = true
+	}
+	// --verify asks the far side to prove the write (#357 §1.4): the handler reads the
+	// bytes back and compares their SHA256 to the one it just computed.
+	if boolFlag(stmt, "verify") {
+		args["verify"] = true
 	}
 	if slot, bad := stringFlags(args, stmt,
 		[2]string{"target", "target"},

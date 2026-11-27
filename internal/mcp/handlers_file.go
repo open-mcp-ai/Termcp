@@ -277,7 +277,7 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 		return toolError(CodeInvalidArgument, "%s", dirWriteRefusal(remotePath)), nil
 	}
 	if getBool(args, "recursive", false) {
-		return s.writeTree(ctx, sftpCli, sessionID, remotePath, data, mode, getBool(args, "dry_run", false)), nil
+		return s.writeTree(ctx, sftpCli, sessionID, remotePath, data, mode, getBool(args, "dry_run", false), getBool(args, "verify", false)), nil
 	}
 
 	rep, err := sftpCli.WriteFile(remotePath, offset, data, mode, "", 0, 0)
@@ -300,7 +300,66 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	if rep.Decoded != "" {
 		out["decoded"] = rep.Decoded + "; the file holds these bytes, not the payload as typed — --mode raw writes the characters verbatim"
 	}
+	// --verify MAKES THE FAR SIDE PROVE IT (#357 §1.4). A byte count next to a hash the
+	// caller cannot check is still a claim: the file could have been truncated by the
+	// transfer, written to a different path, or changed by something else on the host
+	// between the write and the read. Only reading the bytes back settles it, and the
+	// value of that is exactly the case a caller cannot do locally — "did the copy arrive
+	// intact on the other machine".
+	if getBool(args, "verify", false) {
+		verified, detail := s.verifyRemoteWrite(sftpCli, remotePath, offset, rep)
+		for k, v := range detail {
+			out[k] = v
+		}
+		if !verified {
+			// A FAILED VERIFICATION IS NOT A 200. The write did happen — which is why the
+			// refusal is a distinct status and not "the write failed": the caller has to
+			// know that the bytes are already on the host and that they do not match.
+			return toolError(CodeOperationFailed, "%s",
+				"the write landed but the read-back does not match it: "+getString(detail, "_mismatch", "the bytes differ")+
+					". The file was written, so treat its contents as unknown rather than absent — re-read it with "+
+					"`read <session> file "+remotePath+"` before deciding what to do."), nil
+		}
+	}
 	return jsonResult(out), nil
+}
+
+// verifyRemoteWrite reads the file back and compares it, byte for byte, to what was just
+// written.
+//
+// THE COMPARISON IS THE HASH, NOT THE LENGTH: two files can share a byte count and differ
+// in content, and a length check would report success for a file filled with the right
+// number of zeroes. The digest comes from the same helper the write used, so the two sides
+// of the comparison cannot drift into different algorithms.
+func (s *Server) verifyRemoteWrite(cli *filesftp.Client, remotePath string, offset *int64, rep filesftp.WriteReport) (bool, map[string]any) {
+	detail := map[string]any{}
+	info, err := cli.StatFile(remotePath)
+	if err != nil {
+		detail["_mismatch"] = "the file cannot be read back: " + firstLineOf(err.Error())
+		return false, detail
+	}
+	detail["total_size"] = info.Size
+	// THE SAME RANGE THAT WAS WRITTEN. A partial write (`--offset`) hashes only its own
+	// block — the receipt's SHA256 is that block's, not the file's — so comparing against
+	// the whole file would report a mismatch for a correct partial write. The hash is
+	// streamed from the far side, so verifying a 2 GB file costs no memory here.
+	start := int64(0)
+	if offset != nil && *offset > 0 {
+		start = *offset
+	}
+	got, n, err := cli.SHA256Range(remotePath, start, rep.BytesWritten)
+	if err != nil {
+		detail["_mismatch"] = "the file cannot be read back: " + firstLineOf(err.Error())
+		return false, detail
+	}
+	detail["verified"] = got == rep.SHA256
+	detail["sha256_on_host"] = got
+	detail["bytes_on_host"] = n
+	if got != rep.SHA256 {
+		detail["_mismatch"] = fmt.Sprintf("wrote %s (%d bytes), the host has %s (%d bytes)",
+			rep.SHA256, rep.BytesWritten, got, n)
+	}
+	return got == rep.SHA256, detail
 }
 
 // handleFileReplace performs an exact, unique, atomic replacement inside a file.
@@ -688,6 +747,26 @@ func (s *Server) handleFileFsOp(ctx context.Context, request mcp.CallToolRequest
 	defer releaseTransport()
 
 	switch action {
+	case "sha256":
+		// THE HASH A CALLER CAN CHECK AGAINST ITS OWN COPY (#357 §1.4). `--op sha256` was
+		// refused, so "the file on that host is the file I have" could only be answered by
+		// length — and length is the one fact a truncated write preserves.
+		//
+		// STREAMED, not read into memory: this is the operation a 2 GB artifact needs.
+		remotePath := getString(args, "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", "sha256 requires remote_path"), nil
+		}
+		offset := int64(getFloat64(args, "offset", 0))
+		length := int64(getFloat64(args, "length", 0))
+		sum, n, err := sftpCli.SHA256Range(remotePath, offset, length)
+		if err != nil {
+			return fileErr(err, remotePath), nil
+		}
+		return jsonResult(map[string]any{
+			"sha256": sum, "bytes_hashed": n, "offset": offset,
+			"path": remotePath, "ok": true,
+		}), nil
 	case "truncate":
 		remotePath := getString(args, "remote_path", "")
 		// SIZE IS REQUIRED, AND ZERO IS A REAL SIZE. The old check demanded
@@ -760,7 +839,7 @@ func (s *Server) handleFileFsOp(ctx context.Context, request mcp.CallToolRequest
 		}
 		return jsonResult(toMap(result)), nil
 	default:
-		return toolError(CodeInvalidArgument, "%s", "action must be truncate, realpath, or statvfs"), nil
+		return toolError(CodeInvalidArgument, "%s", "action must be truncate, realpath, statvfs, or sha256"), nil
 	}
 	return successResult(), nil
 }
