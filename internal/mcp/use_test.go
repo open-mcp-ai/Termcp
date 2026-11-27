@@ -269,7 +269,10 @@ func TestShortCircuitFileOperationsPinsIssue237(t *testing.T) {
 	if all := sessMgr.ListAll(); len(all) != 1 {
 		t.Fatalf("a running short-circuit run must not create another container, got %d: %+v", len(all), all)
 	}
-	if cs := sessMgr.GetChildShell(slowChannel); cs == nil {
+	// THE HEADER IS AN ADDRESS, NOT AN ID (#303): it is `session:index`, the spelling a
+	// caller can hand straight back to `read`/`close`. Resolving it through the same door
+	// every directive uses keeps this assertion about the registry, not about spelling.
+	if cs := sessMgr.GetChildShell(shellIDFromHandle(t, s, slowChannel)); cs == nil {
 		t.Errorf("the channel named in the reply is not in the registry: %q", slowChannel)
 	} else {
 		cs.TerminateShell() // leave nothing running behind this test
