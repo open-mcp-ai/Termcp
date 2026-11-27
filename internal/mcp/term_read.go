@@ -888,14 +888,17 @@ func (s *Server) windowSlot(stmt directive.Statement, win termArgs, doc map[stri
 	// truncated one. The reporter of #269 followed exactly that header and lost the
 	// window it named.
 	//
-	// The two ways bytes can be absent from the body WITHOUT the reply lying are the ones
-	// that name them: `fold` says `Folded: bytes A-B of T; read --cursor A` (the bytes are
-	// still there to fetch), and a `--stream` filter says `Omitted: N bytes … went past
-	// unseen`. Both are deliberate and both are visible, so their 200/206 and their range
-	// stay. Anything else with an empty body is "nothing yet" — 204, and a position that
-	// did not move.
-	omitted := int64(getFloatAny(doc, "stream_omitted_bytes", 0)) > 0
-	hasBytes := len(body) > 0 || truncated || omitted
+	// The one way bytes can be absent from the body WITHOUT the reply lying is the way that
+	// names them: `fold` says `Folded: bytes A-B of T; read --cursor A`, so the bytes are
+	// still there to fetch and the 206 with its range stays.
+	//
+	// A `--stream` FILTER IS NOT THAT CASE, and the difference is measured rather than
+	// argued: `read --stream e --offset 0` on a stdout-only channel selects nothing, so its
+	// stream total is 0 and `bytes */0` is the only true range — it must not become a 200
+	// because the other stream's bytes went past (issue #202, pinned by
+	// TestAnEmptyStreamReportsZeroBytes). Those bytes are named by `Omitted`, which is a
+	// fact the caller can act on without the status claiming a delivery.
+	hasBytes := len(body) > 0 || truncated
 	code := 200
 	switch {
 	case hasBytes && (truncated || boolAny(doc, "has_more")):

@@ -4,115 +4,15 @@
 
 ### Added
 
-- `get ext` reports reconciliation fields beside the status word: `liveness` (a probe
-  taken at reply time — `alive` read from the channel's own transport, `checked_at`,
-  `session_status`, `exit_code` once it exits, and `pid_unknown` naming why no pid is
-  claimed: the process runs on the target host and SSH carries none), `restarts` (how
-  many times it came back up after going down, counted on the transition, not on every
-  bring-up) and `last_active_at`. A status string is the reconciler's belief; these are
-  measurements, and a closed channel now says it closed rather than reading as one that
-  never had a process.
-- Drive-prefixed Windows paths written with backslashes (`C:\tc\a.txt`,
-  `/C:\tc\a.txt`) are rewritten to the POSIX wire form (`/C:/tc/a.txt`) before
-  whitelist checks and file operations across `term`, file tools, `read … | write …`
-  pipelines and Web UI remote routes, with `path_adapted` / `Path-Adapted` recording the
-  adaptation. Unprefixed relative paths and `./C:\x` stay untouched so POSIX filenames
-  containing backslashes remain reachable; `help read` / `help write` include `/C:/...`
-  examples.
-- An extension channel declared with a stdio MCP server now works as a peer in `call`
-  and `get`: `get <channel> tools [<name>]` prints the live tool table or one schema,
-  and `call <channel> <tool> [<json-args>]` performs the `initialize` /
-  `notifications/initialized` handshake once per channel, invokes `tools/call`, and
-  returns the tool's text (`--json` keeps the frame, `--send` writes without waiting).
-  Plain `open` pipe channels still accept raw JSON-RPC frames only.
-- A template can hold several channels: `[[channel]]` names each process or endpoint,
-  with its own `kind` (http, stdio, pty), `name` and `target`, so one card can run an
-  MCP endpoint here and a worker there — two connections, one lifecycle, one retry
-  ladder, one place to edit when a host moves. A channel is opened once per session
-  rather than once per caller, `open ext <name> --channel <ch>` names which one, `get
-  ext` reports every channel with its handle, and `/ext/{name}/stream` talks to the
-  http one. The old single-channel spelling (`command`/`url`/`mode`) keeps its meaning
-  exactly; a file that uses both is refused rather than merged.
-- `ext create --template @file` now reads the file. The help text has always shown
-  that spelling, and it used to reach the TOML parser as the literal `@file`.
-- A template's tunnel can be built on another host's connection: `[[forward]]` takes
-  `via = "<ssh_config>"`, so ONE extension can mount an outbound MCP endpoint and open
-  an inbound listener on a machine it does not run on (a VPS dialling back, a NAT
-  traversal). The extension still has one target, so its handle and `open ext` are
-  unchanged — a via host is a connection opened for the tunnel alone, sharing one SSH
-  link per host. A tunnel that fails there is reported in `failures[]` with its `via`
-  host and retried on its own: the endpoint keeps answering, and the status stays
-  `available` because only the tunnel is down.
-- A `guide` tool publishes the onboarding material written for a PERSON — what to
-  configure next, why each step exists, and which steps are theirs — so a model can
-  hand it over verbatim instead of improvising a lesson. No argument returns the
-  first-run page (under 4 KB); `topic` returns one subject. The same pages are
-  published read-only as `termcp://guide/*`, `help` stays the machine view, and the
-  material says plainly that an empty `ls ext` on a fresh install is normal.
-- `read <session> file <directory>` lists a bounded, structured directory table
-  (type, path/name, size, mtime, mode) instead of failing with `is a directory`.
-  `--depth` (1–5) and `--limit` (200–2000) bound the walk; withheld entries and
-  unreadable entries are counted and named, and symbolic links are shown but never
-  followed.
-- `write <session> file <directory> --recursive` accepts a JSON object of
-  path→content and writes the tree in one call, with `--dry-run`, one result line per
-  file, and 100-file / 1 MiB caps. Absolute and parent-escaping keys are refused
-  before anything is written. Without `--recursive`, a directory target is refused
-  with both working spellings: one statement per file, or this batch form.
-- `close` takes several targets: `close a1f3:1,b2c4:1`, `close a1f3 --index 1,2,3`,
-  `close a1f3 --all`. One reply slot per target, in the order written, each carrying
-  a `Batch:` header naming the address it answers; a target that fails does not stop
-  or undo the ones beside it. `--all` on a channel handle is refused and names
-  `close <session>` instead of closing the session behind the caller's back.
-- `rm` takes several sessions (`rm a1f3,b2c4`) and clears the archive in one call
-  (`rm --dead`, preview with `--dry-run`). Running sessions are refused per entry and
-  never swept: `--dead` names its targets by state, so `--force` does not apply to it.
-- An extension's own notifications now reach an attached client: `/ext/{name}/stream`
-  keeps a reader on the channel per extension, so a frame the peer sends on its own
-  (`notifications/<own name>/<event>` — a spec-legal custom method) is delivered to
-  every open `GET` stream within the second, with no request in flight. That is what
-  makes a custom agent driven by a self-written MCP server possible without teaching
-  it termcp's directive language, and it is not `resources/subscribe`: the subscriber
-  consumes the peer's own methods, so all this had to do was not swallow them. The
-  reader also renews the extension's idle clock, so a subscriber keeps a lazily-started
-  peer alive between events. The version the endpoint reports is the peer's own
-  (`Mcp-Protocol-Version` from its `initialize` answer), not this build's constant, and
-  the answer window is five minutes: it is the backstop for a peer that never answers,
-  not a tool timeout, so a `tools/call` that takes a minute still returns its result.
-- A session can be named by its full id, by the `--name` it was connected with, or by
-  any prefix of the id that only one session matches: `run web:1`, `ls web`, `get
-  70ab`. A prefix shorter than four characters, or one that matches two sessions, is
-  refused with the candidates named rather than resolving to whichever is closer.
-  `ls` prints the shortest form that works, so the address in the reply is the one to
-  paste back.
-- The `term` tool takes `encoding`, the charset this call's reads assume (the same
-  flag `read --encoding` sets per statement). Without it a terminal that speaks GBK or
-  UTF-16 refuses the whole reply, because a byte that is not UTF-8 cannot be laid out
-  as text — the one thing a caller could not work around from outside.
-- Every verb's refusal now ends with one copyable example (`run h:1 $1`, `rm a1f3
-  --dry-run`, …). A caller that misspelled a flag used to be told "unknown flag" and
-  left to reconstruct the right line from a table; the example is the line, spelled
-  for the verb that refused.
-- A shell that reports its own completion is now heard on a plain `run`: when the
-  remote shell emits OSC 133 (`\x1b]133;D;<status>`) — Starship, oh-my-posh, fish
-  4.x, VS Code — the reply carries `Completion: exit` and `Exit-Code` without the
-  caller asking with `--until exit`. The marker is read from the window's raw bytes
-  only when the command actually printed something, so a still-running command is
-  not credited with a neighbour's status; with no marker the reply says nothing, the
-  same as before.
-- `write <session> file --old-text … --new-text …` reports which line it changed:
-  besides `bytes_written` the reply carries `line` and a one-line `diff` (`L2: -
-  timeout = 5 | + timeout = 30`). Checking an edit no longer means reading the file
-  back — the exact-replace primitive exists to avoid paying for the whole file.
-
 ### Fixed
 
 - A reply no longer claims bytes it did not deliver (#269 #1): an empty window answered
   `200` with `Content-Range: bytes A-B/N` naming the pty's stripped echo, so a caller
   paging by that header skipped the window it was told it had seen. It is now `204` with
   `Content-Range: bytes */N` and `Input-At`, and the output that arrives later is still
-  readable. `fold` (`Folded`) and `--stream` (`Omitted`) keep their ranges: those name
-  what they withheld.
+  readable. A folded window (`Folded`) keeps its 206 and its range: it names the span it
+  withheld and the flag that fetches it. A `--stream` filter that selected nothing stays
+  `bytes */0` with `Omitted` — its own stream total is the only true range.
 - Fixed a whitelist and review-gate bypass on `read … | write …` pipelines (#358):
   both ends now go through capability/path admission (`file_read` or `shell_output` on
   the source, `file_write` on the destination) before the copy starts. A copy into a
