@@ -820,6 +820,36 @@ check "#269 仍给重读位置" "$E269" '"Input-At"'
 L269=$(body "$(term "read $H269 --timeout 1" 2>/dev/null || true)")
 term "close $H269" >/dev/null
 
+# ---------------------------------------------------------------------------
+# #319 单句直通：{run, session|shell}
+echo
+echo "== #319 单句直通"
+H319=$(body "$(term "connect internal --name r319")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+S319=${H319%%:*}
+R319=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"run":"printf \"%s\\n\" \"a b\" | tr \" \" \"_\"; echo \"%{http_code}\"","session":sys.argv[1],"timeout":5}))' "$S319")")
+check "#319 管道按 shell 语义执行" "$R319" 'a_b'
+check "#319 字面量不被 DSL 吞掉" "$R319" '%{http_code}'
+check "#319 一次性管道报 exit_code" "$R319" '"Exit-Code":0'
+R319E=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"run":"exit 7","session":sys.argv[1],"timeout":5}))' "$S319")")
+check "#319 非零退出如实上报" "$R319E" '"Exit-Code":7'
+R319S=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"run":"cd /tmp","shell":sys.argv[1],"timeout":6}))' "$H319")")
+R319P=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"run":"pwd","shell":sys.argv[1],"timeout":6}))' "$H319")")
+check "#319 shell 形式保留 cd 状态" "$R319P" '/tmp'
+check_not "#319 交互 shell 不谎报 exit_code" "$R319P" 'Exit-Code'
+R319B=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"run":"echo hi","session":sys.argv[1],"shell":sys.argv[2],"timeout":3}))' "$S319" "$H319")")
+check "#319 session+shell 互斥" "$R319B" 'alternatives'
+R319N=$(termj '{"run":"echo hi","timeout":3}')
+check "#319 缺目标被拒" "$R319N" 'one-shot pipe'
+R319C=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"ls","run":"echo hi","session":sys.argv[1],"timeout":3}))' "$S319")")
+check "#319 cmd+run 互斥" "$R319C" 'two different command lines'
+term "close $H319" >/dev/null
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi
