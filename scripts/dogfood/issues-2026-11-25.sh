@@ -104,6 +104,40 @@ termj() { curl -s -X POST "http://127.0.0.1:$PORT/api/term" -H 'Content-Type: ap
 body() { printf '%s' "$1" | python3 -c 'import sys,json
 try: print(json.load(sys.stdin).get("body",""))
 except Exception: print("")'; }
+# await_pty_ready HANDLE — wait until the channel's shell is actually reading.
+#
+# A PTY THAT IS STILL STARTING DISCARDS WHAT IS TYPED INTO IT, and then every check about
+# that command describes a transcript in which it never ran: measured here, "#310 普通 run
+# 拿到 Completion" went red on a loaded machine while passing alone, and the command's own
+# marker was simply absent. The probe asks the SHELL to build the marker
+# (pty-ready-$(echo probe)) rather than grepping for a literal, because a literal matches
+# the echo of the line that contains it — a discarded input would then look ready, which is
+# the exact failure this exists to rule out.
+await_pty_ready() {
+  local h="$1" i=0 out
+  while [ "$i" -lt 60 ]; do
+    termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"run "+sys.argv[1]+" $1","args":["echo pty-ready-$(echo probe)"],"timeout":2}))' "$h")" >/dev/null
+    out=$(term "read $h")
+    if printf '%s' "$out" | grep -qF 'pty-ready-probe'; then
+      # LEAVE THE CHANNEL QUIET, and wait for the server to say so: a read that merely
+      # drains bytes returns while the prompt is still being painted, and the next run
+      # then starts from a line that is not a prompt — which trips the compound-line
+      # warning and lets the probe's leftovers land in its window. `Completion: quiet` is
+      # the server's own statement that the stream has been still for a whole window.
+      local j=0
+      while [ "$j" -lt 50 ]; do
+        if term "read $h" | grep -qF '"Completion":"quiet"'; then return 0; fi
+        j=$((j+1)); sleep 0.1
+      done
+      return 0
+    fi
+    i=$((i+1))
+    sleep 0.2
+  done
+  return 1
+}
+
 # api METHOD PATH [BODY] — print "CODE<TAB>BODY".
 api() {
   local method="$1" path="$2" body="${3:-}"
@@ -628,6 +662,7 @@ echo
 echo "== #310 被动 OSC 133"
 H310=$(body "$(term "connect internal --name osc310")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
 check "#310 起了通道" "$H310" ':'
+await_pty_ready "$H310" || echo "       warning: the shell never reported ready; the checks below may describe a discarded command"
 
 # 1) 不写 --until，标记照样被读出来（此前只认 --until exit）。
 R310=$(termj "$(python3 -c 'import json,sys
