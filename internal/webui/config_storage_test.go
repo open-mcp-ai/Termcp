@@ -694,3 +694,43 @@ func TestCreatingAKeyWithoutANameIsRefused(t *testing.T) {
 		t.Fatalf("rename to blank = %s; want key_label_invalid", rec.Body.String())
 	}
 }
+
+/* POST /api/keychain/{id}/plug with {"passphrase":"…"} is the HTTP side of the
+ * one-step unlock: a wrong passphrase rolls back the plug (400 passphrase_incorrect)
+ * and the right one makes every sealed host readable in one request.
+ */
+func TestPluggingAKeyWithPassphraseOverHTTPOpensItsHosts(t *testing.T) {
+	const pass = "synthetic passphrase for tests"
+	store, _, mux := newKeychainServer(t, 0x7f)
+	profile := []byte("kind = \"remote\"\nhost = \"host.example\"\nuser = \"operator\"\npassword = \"placeholder\"\n")
+	keychainCall(t, mux, http.MethodPut, "/api/connections/alpha", string(profile), http.StatusNoContent)
+	keychainCall(t, mux, http.MethodPut, "/api/connections/beta", string(profile), http.StatusNoContent)
+
+	guarded := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain",
+		`{"passphrase":"`+pass+`","label":"work"}`, http.StatusOK))
+	keyID := guarded.Keys[0].ID
+	keychainCall(t, mux, http.MethodPost, "/api/config-storage/encrypt",
+		`{"names":["alpha","beta"],"key":"`+keyID+`","passphrase":"`+pass+`"}`, http.StatusOK)
+	keychainCall(t, mux, http.MethodPost, "/api/keychain/"+keyID+"/unplug", "", http.StatusOK)
+
+	wrong := keychainCall(t, mux, http.MethodPost, "/api/keychain/"+keyID+"/plug",
+		`{"passphrase":"wrong"}`, http.StatusBadRequest)
+	if !strings.Contains(wrong.Body.String(), "passphrase_incorrect") {
+		t.Fatalf("wrong passphrase = %s; want passphrase_incorrect", wrong.Body.String())
+	}
+	listed := decodeKeychain(t, keychainCall(t, mux, http.MethodGet, "/api/keychain", "", http.StatusOK))
+	if listed.Keys[0].Plugged {
+		t.Fatal("a wrong passphrase still left the key plugged over HTTP")
+	}
+
+	ok := decodeKeychain(t, keychainCall(t, mux, http.MethodPost, "/api/keychain/"+keyID+"/plug",
+		`{"passphrase":"`+pass+`"}`, http.StatusOK))
+	if !ok.Keys[0].Plugged {
+		t.Fatal("right passphrase left the key unplugged")
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := store.ReadRaw(name); err != nil {
+			t.Fatalf("%s unread after one-step HTTP plug: %v", name, err)
+		}
+	}
+}

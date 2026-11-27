@@ -394,7 +394,11 @@ POST   /api/keychain                        {"label":"…"}                     
                                             `label` is REQUIRED; without one the
                                             request is 400 key_label_invalid
 DELETE /api/keychain/{id}                   {"backup_confirmed":true}         delete a key
-POST   /api/keychain/{id}/plug              load it (unseal the words into memory)
+POST   /api/keychain/{id}/plug              {"passphrase":"…"}                load it (unseal the
+                                            words into memory) and activate every
+                                            host it seals — one step, one answer.
+                                            The passphrase is required when the key
+                                            has one; an empty body loads only.
 POST   /api/keychain/{id}/unplug            remove it
 POST   /api/keychain/{id}/rename            {"label":"…"}                     rename it
 POST   /api/keychain/{id}/rotate            {"passphrase":"…"} → {"keys":[…],"mnemonic":"…"}
@@ -544,6 +548,39 @@ Restart behaviour follows from the two switches being independent: a key whose
 activated from the catalog boolean, and hosts whose key has a passphrase come back
 **inactive** — the activation key was never on disk, so the passphrase has to be
 typed again.
+
+Releasing a key never asks for anything: the words leave memory and the passphrase
+plays no part in that direction. Loading one asks for its passphrase exactly when the
+key carries one, and that single answer does both layers — the words go into memory
+and every host the key seals is activated. A wrong passphrase rolls the load back, so
+the panel never shows a key that is "loaded" while nothing it seals can be read.
+
+### The two switches on a host card
+
+A host card carries two controls, and they answer different questions:
+
+| control | question | passphrase |
+| --- | --- | --- |
+| the padlock in the title row | is this host stored as ciphertext or as plaintext TOML? | never |
+| the caption on the protocol row | can this host be read right now? | only when its key has one |
+
+The padlock is storage mode, and it is a toggle: 已加锁 (ciphertext) ↔ 未加锁
+(plaintext), each direction confirmed, neither direction asking for a passphrase —
+it only changes the form the bytes are kept in.
+
+The caption has three states in one slot, and its press moves the host to the other
+side of the one it is in:
+
+| caption | press |
+| --- | --- |
+| 钥匙未载入 | load that key (and activate this host) |
+| 未激活 | activate this host |
+| 已激活 | deactivate this host |
+
+Only the first two replace the address line: a host that cannot be read has no address
+to show, while an activated host keeps its address and wears the state beside it.
+Deactivating drops the in-memory activation key and touches no ciphertext, so the
+press is reversible and needs nothing from the person.
 
 ### Sharing one host with another person
 

@@ -115,8 +115,14 @@ func (h *Handler) handleKeychainNewMnemonic(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"mnemonic": phrase})
 }
 
-// handleKeychainPlug inserts one key. It is the quiet action: the words are already
-// in the slots, so nothing is typed.
+type keychainPlugRequest struct {
+	Passphrase string `json:"passphrase"`
+}
+
+// handleKeychainPlug inserts one key and, when a passphrase is given (or the key
+// needs none), activates the hosts it seals in the same step. An empty body still
+// inserts the key without activating — callers that do both in two turns keep
+// working, and a caller that passes {"passphrase":"…"} gets the one-step flow.
 func (h *Handler) handleKeychainPlug(w http.ResponseWriter, r *http.Request) {
 	if h.SSH == nil {
 		http.Error(w, "ssh store not configured", http.StatusServiceUnavailable)
@@ -129,7 +135,20 @@ func (h *Handler) handleKeychainPlug(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := h.SSH.PlugKey(id, configEncryptionProviders()...); err != nil {
+	var body keychainPlugRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := decodeConfigStorageJSON(r, &body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	var err error
+	if body.Passphrase != "" {
+		err = h.SSH.PlugKeyWithPassphrase(id, body.Passphrase, configEncryptionProviders()...)
+	} else {
+		err = h.SSH.PlugKey(id, configEncryptionProviders()...)
+	}
+	if err != nil {
 		writeKeychainError(w, err)
 		return
 	}

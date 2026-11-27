@@ -399,3 +399,58 @@ func TestAKeyCannotBeCreatedWithoutAName(t *testing.T) {
 		t.Fatalf("label = %q; want the trimmed name", renamed[0].Label)
 	}
 }
+
+/* Plugging a passphrase key with its passphrase inserts the key AND activates every
+ * host it seals in one step; a wrong passphrase rolls the plug back so the person
+ * is left where they started rather than half-way ("loaded, nothing readable").
+ *
+ * Mutation check: skip the Activate call in PlugKeyWithPassphrase and both the
+ * rollback and the final Read fail.
+ */
+func TestPluggingWithPassphraseActivatesEverySealedHost(t *testing.T) {
+	t.Setenv(EnvKEKVariable, environmentKEK(0x7e))
+	const pass = "synthetic passphrase for tests"
+	repo, err := InitializeRepository(t.TempDir(), NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	key, err := repo.CreateKeyWithLabel(testPhrase(t), pass, "work", NewEnvProvider(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := keyIDOf(t, key.ID)
+	for _, name := range []string{"alpha", "beta"} {
+		if err := repo.SaveWithOptions(name, []byte("host = \""+name+".example\"\n"), SaveOptions{KeyID: id, Passphrase: pass}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.UnplugKey(id); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wrong passphrase leaves the key UNPLUGGED — not half-done.
+	if err := repo.PlugKeyWithPassphrase(id, "not the passphrase", NewEnvProvider("")); !errors.Is(err, ErrPassphraseWrong) {
+		t.Fatalf("PlugKeyWithPassphrase(wrong) = %v; want ErrPassphraseWrong", err)
+	}
+	keys, err := repo.Keys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys {
+		if k.ID == key.ID && k.Plugged {
+			t.Fatal("a wrong passphrase still left the key plugged in")
+		}
+	}
+
+	// Right passphrase: key is plugged and every host is readable in one call.
+	if err := repo.PlugKeyWithPassphrase(id, pass, NewEnvProvider("")); err != nil {
+		t.Fatalf("PlugKeyWithPassphrase: %v", err)
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		if _, err := repo.Read(name); err != nil {
+			t.Fatalf("reading %s after one-step plug: %v", name, err)
+		}
+	}
+}

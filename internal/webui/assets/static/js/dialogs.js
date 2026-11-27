@@ -486,11 +486,22 @@ function renderConnGrid(connections, bannerMsg) {
     /* The state caption rides on the protocol row, hard against the right edge: the
        row is short ("SSH") and the space beside it is the only room on the card that
        was already empty. Below the row it read as a second, competing line. */
+    /* WHICH LOCK IS SHUT, on one line, in one place. Three states, one slot:
+       the key is not loaded, the key is loaded but this host is not activated, or the
+       host is activated and can be deactivated. Two glyphs in the title row (a padlock
+       for storage and a key for activation) put two answers where the eye expects one;
+       storage belongs to the padlock, and everything about the second layer belongs
+       here. */
     var lockLine = c.key_unloaded
       ? cardLockLine(c.name, 'key_unloaded', SVG_KEY_SLASHED, t('storage.cardLocked'), t('storage.cardLockedHint'))
       : (c.not_activated
         ? cardLockLine(c.name, 'not_activated', SVG_KEY, t('storage.cardInactive'), t('storage.cardInactiveHint'))
-        : '');
+        : (c.storage === 'encrypted'
+          ? cardLockLine(c.name, 'activated', SVG_KEY, t('storage.cardActive'), t('storage.cardActiveHint'))
+          : ''));
+    /* The address is replaced only when the host cannot be read; "activated" is a
+       state of a working host, so it rides beside its address instead. */
+    var shut = !!(c.key_unloaded || c.not_activated);
     tile.innerHTML =
       '<div class="entry-card-inner">' +
       '<div class="entry-card-main">' +
@@ -516,7 +527,7 @@ function renderConnGrid(connections, bannerMsg) {
          written. The reason is the state the server already reported, not a new
          probe: unloaded key and inactive host are different problems with different
          fixes. */
-      (lockLine ? '' : (addr ? '<div class="node-addr">' + escapeHtml(addr) + '</div>' : '')) +
+      (shut ? '' : (addr ? '<div class="node-addr">' + escapeHtml(addr) + '</div>' : '')) +
       '<div class="node-sess">' + escapeHtml(info.count
           ? tCount('nethub.sessions.one', 'nethub.sessions.other', { count: info.count })
           : t('nethub.sessions.none')) + '</div>' +
@@ -537,14 +548,18 @@ function renderConnGrid(connections, bannerMsg) {
         _nodeBatch.toggleSelection(c.name, tile);
         return;
       }
-      /* The state caption is a question, not a door: its own handler explains, and a
-         card press that opened the keychain as well would answer twice at once. */
+      /* The caption is a button and carries its own handler, which opens the same
+         dialog this press would: two answers to one press would be a modal behind a
+         modal. */
       if (e.target.closest('.conn-edit-btn') || e.target.closest('.sess-copy-btn') || e.target.closest('.conn-quick-btn') || e.target.closest('.conn-storage-mark') || e.target.closest('.node-addr.is-locked')) return;
-      /* An encrypted host on a locked store has no decrypted recipe to connect
-         to. Clicking the card opens the unlock dialog directly, so closing the
-         modal earlier does not trap the user in an un-unlockable page. */
+      /* An encrypted host on a locked store has no decrypted recipe to connect to, so
+         the press opens what would unlock it — and WHICH lock is shut decides which
+         door. A loaded key with an inactive host is one passphrase away from working,
+         so it opens the activate dialog; a key that is not loaded can only be fixed in
+         the keychain. Sending both to the keychain made the common case (activating a
+         host on a key already in memory) unreachable from the card. */
       if (c.storage === 'encrypted' && (!c.host || c.kind === 'remote' && !c.user)) {
-        showModal('modal-config-storage');
+        configStorageUnlockHost(c.name);
         return;
       }
       var b = document.getElementById('conn-load-banner');

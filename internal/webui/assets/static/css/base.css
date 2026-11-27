@@ -728,6 +728,11 @@
      word looks safer. Muted, because the question above it is the message. */
   .modal-hint { margin: 0 0 4px; color: var(--text-muted); font-size: .8rem; line-height: 1.5; word-break: break-word; }
   .conn-field-hint { margin: -8px 0 8px; color: var(--text-secondary); font-size: .7rem; }
+  /* An EMPTY hint is not a hint. It is a paragraph carrying a negative top margin,
+     so leaving one in the DOM pulls the fields up into the block above and leaves a
+     gap below — the layout bug that reads as "the padding is missing". Dialogs write
+     this node from a value that is often empty ("no message for this action"). */
+  .conn-field-hint:empty { display: none; }
   .form-ok { margin: 0 0 8px; white-space: pre-line; color: var(--success-bright); font-size: .82rem; }
   .sess-fwd-info { display: none; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; text-align: center; }
 

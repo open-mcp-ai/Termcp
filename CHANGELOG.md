@@ -34,7 +34,8 @@
   not several secrets, and the word/phrase wrapper is gone because a phrase sealing
   the key derived from that same phrase meant nothing. Words can be shown on demand
   and re-created anywhere.
-- There is no lock, no unlock and no default key — and no index either. Each host
+- There is no store-wide lock and no key that is privileged (`default` is just the
+  name a store's first key starts with) — and no index either. Each host
   is one directory under `ssh_configs/`, and *which key seals it* is the `keyID` in
   that host's own envelope header, so the list of hosts is the directory listing and
   any one inserted key can read it. An encrypted host's activation state lives in
@@ -43,6 +44,17 @@
   host names its key explicitly. Plugging in a key, activating a host and showing
   the words are human-only actions — an agent request is refused even with a valid
   token.
+- **Loading a key can activate its hosts in the same answer.** A key that carries a
+  passphrase asks for it once and spends it on both layers: the words go into memory and
+  every host that key seals becomes readable. A wrong passphrase rolls the load back, so
+  a key is never left "loaded" with nothing it seals readable. Releasing a key never asks
+  for anything — the words leave memory and the passphrase has no part in that direction.
+- A host card carries two controls and they answer different questions: the **padlock** is
+  storage mode (locked = ciphertext, unlocked = plaintext TOML), and the caption above is
+  the second layer. Neither the lock nor deactivation asks for a passphrase; encrypting
+  and restoring each confirm first, because they change the form the bytes are kept in.
+- Loading a key from the keychain row asks for its passphrase there too, so the row's
+  "load" button cannot leave a passphrase key loaded and every host it seals unreadable.
 - Keys can be named, rotated (keeping or resetting their passphrase), backed up together, filtered by name, and deleted with a list of the hosts still in the way; encrypted hosts can be re-keyed directly onto another key in memory.
 - Addresses and user names can be masked globally; `?reveal=true` prints them. It
   changes what is displayed, not what is stored, dialed or validated.
@@ -67,12 +79,14 @@
   directory, so painting a list of 245 hosts took over two minutes; it now reads
   that name's directory, with the whole-tree scan kept for the case it exists for
   (a name whose spelling differs in case). 245 hosts: 138 s → 0.6 s.
-- A host card whose key is not loaded, or whose host is not activated, says so in
-  three words on the right of its protocol row instead of a two-line paragraph in a
-  browser-drawn box below it, marked with a key rather than a second padlock: a key
-  when the key is loaded (the host only needs activating), the same key struck
-  through when it is not. Its click still explains what to do, and no longer opens
-  the keychain behind the explanation.
+- A host card says whether it can be read, in three words on the right of its protocol
+  row, and that caption is the door: an unloaded key, an inactive host and an active one
+  are one slot, and a press moves the host to the other side of the state it is in.
+  Activating a host no longer detours through the keychain panel, and a host that was
+  reachable only from the batch selection — deactivate — has its own press. Single-host
+  dialogs name the host instead of saying "the selected host", and the hint line above
+  the passphrase field is gone (with the negative margin that made an empty one eat the
+  block above it).
 - The import-host button beside the sharing address is now the same glyph-only
   button as the copy button next to it; its word lives in the tooltip.
 - Two dialog handlers that had been left dangling: opening the key-picker threw a
