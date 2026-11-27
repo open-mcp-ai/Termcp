@@ -79,16 +79,21 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 			}
 			frame = payload
 		}
-		// One frame, one line, under the channel's line lock so a bare frame and the
+		// One frame, one line, under the channel's line token so a bare frame and the
 		// tool-name wrapper cannot interleave on the same process (#212).
-		lock := s.lineLock(stateKey)
-		lock.Lock()
+		tok := s.lineToken(stateKey)
+		select {
+		case <-tok:
+		case <-ctx.Done():
+			return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeInvalidArgument,
+				msg: "timed out waiting for a prior command line on this channel to finish submitting"})
+		}
 		_, failIn := s.callTool(ctx, "shell_input", argsOf("shell_id", handle, "text", frame))
 		var failKey *toolFailure
 		if failIn == nil {
 			_, failKey = s.callTool(ctx, "shell_key", argsOf("shell_id", handle, "key", "enter"))
 		}
-		lock.Unlock()
+		tok <- struct{}{}
 		if failIn != nil {
 			return s.slotFromFailure(ctx, stmt, failIn)
 		}

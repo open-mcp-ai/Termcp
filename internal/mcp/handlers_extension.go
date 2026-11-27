@@ -650,6 +650,19 @@ func (s *Server) extensionRuntimeFields(entry map[string]any, st extensions.Stat
 	if len(st.Targets) > 0 {
 		entry["targets_status"] = st.Targets
 	}
+	// RECONCILIATION FIELDS (issue #325): when was this last active, how many times
+	// has it recovered, and what does the transport say right now? Only on `get`
+	// (`withHistory == true`) for the full probe, because `list` stays one compact row
+	// per extension.
+	if st.LastActiveAt > 0 {
+		entry["last_active_at"] = st.LastActiveAt
+	}
+	if st.Restarts > 0 {
+		entry["restarts"] = st.Restarts
+	}
+	if withHistory && st.Liveness != nil {
+		entry["liveness"] = st.Liveness
+	}
 	if n := len(st.Failures); n > 0 {
 		switch {
 		case withHistory:

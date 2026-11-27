@@ -850,22 +850,23 @@ func (r *Reconciler) ExtensionOf(sessionID, shellID string) (string, bool) {
 	if sessionID == "" && shellID == "" {
 		return "", false
 	}
-	r.mu.Lock()
-	states := make([]*extState, 0, len(r.states))
-	for _, st := range r.states {
-		states = append(states, st)
-	}
-	r.mu.Unlock()
+	states := make([]*extState, 0)
+	r.states.Range(func(_, v any) bool {
+		states = append(states, v.(*extState))
+		return true
+	})
 	sort.Slice(states, func(i, j int) bool { return states[i].name() < states[j].name() })
 	for _, st := range states {
 		name := st.name()
-		st.mu.Lock()
-		match := sessionID != "" && (st.sessionID == sessionID || st.closedSessionID == sessionID)
+		// ONE SNAPSHOT FOR THE WHOLE TEST: the row is a value now, so the four fields are
+		// read at one moment instead of under a lock the walk also takes.
+		d := st.load()
+		match := sessionID != "" && (d.sessionID == sessionID || d.closedSessionID == sessionID)
 		if !match && shellID != "" {
-			match = st.shellID == shellID || st.closedShellID == shellID
+			match = d.shellID == shellID || d.closedShellID == shellID
 		}
 		if !match && sessionID != "" {
-			for _, ex := range st.extra {
+			for _, ex := range d.extra {
 				if ex.sessionID == sessionID {
 					match = true
 					break
@@ -873,14 +874,13 @@ func (r *Reconciler) ExtensionOf(sessionID, shellID string) (string, bool) {
 			}
 		}
 		if !match && shellID != "" {
-			for _, ex := range st.extra {
+			for _, ex := range d.extra {
 				if ex.shellID == shellID {
 					match = true
 					break
 				}
 			}
 		}
-		st.mu.Unlock()
 		if match {
 			return name, true
 		}

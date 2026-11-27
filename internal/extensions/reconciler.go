@@ -133,6 +133,47 @@ type Status struct {
 	// Targets reports the per-host breakdown when the extension declares multiple
 	// targets. Omitted on single-target templates so the wire format stays small.
 	Targets []TargetStatus `json:"targets,omitempty"`
+
+	// LastActiveAt is when anything last asked for or drove this extension (Unix ms);
+	// 0 = never. Reported for every extension, not only the lazy ones whose idle timer
+	// needed it: "when was this last used" is how a caller separates an unused instance
+	// from a broken one.
+	LastActiveAt int64 `json:"last_active_at,omitempty"`
+	// Restarts counts the times this extension CAME BACK UP after going down, in this
+	// process. A large number is a fact about the target (a flapping tunnel, a program
+	// that exits on start), and it is not derivable from `failures` — those are capped
+	// and only record the most recent few.
+	Restarts int `json:"restarts,omitempty"`
+	// Liveness is a MEASUREMENT, not the status string (issue #325): the process was
+	// looked at just now. `status` is the reconciler's belief, which is what a caller
+	// cannot tell apart from "the channel died and nothing noticed yet".
+	Liveness *Liveness `json:"liveness,omitempty"`
+}
+
+// Liveness is the answer to "is the process actually there", taken from the transport
+// rather than from a stored status string (issue #325).
+//
+// THE PID IS REPORTED ONLY WHEN SOMETHING REALLY KNOWS IT. A channel runs on the
+// target host over SSH, and SSH has no place in the protocol for "the pid of the
+// process I just started" — so inventing one (or worse, reporting this daemon's own)
+// would be a number a caller can check and find wrong. `pid_unknown` says which host
+// it is running on instead, and `alive` is the fact the caller actually wanted: a pid
+// by itself does not answer "is it still running" without a second, racier query.
+type Liveness struct {
+	// CheckedAt is when this was measured (Unix ms): a probe has a time, a status
+	// string does not, and a caller comparing two replies needs to know which is newer.
+	CheckedAt int64 `json:"checked_at"`
+	// Alive is read from the channel's own process/transport signal.
+	Alive bool `json:"alive"`
+	// SessionStatus is the parent connection's published status, so "the process is
+	// gone" and "the connection is gone" are distinguishable.
+	SessionStatus string `json:"session_status,omitempty"`
+	// ExitCode is present once the process has exited, so a crash is recognizable.
+	ExitCode *int `json:"exit_code,omitempty"`
+	// Pid and PidUnknown are exclusive: a number when the OS told this daemon, and the
+	// reason when it did not.
+	Pid        int    `json:"pid,omitempty"`
+	PidUnknown string `json:"pid_unknown,omitempty"`
 }
 
 // maxFailures caps the history. Enough to see a pattern, not so much that a
@@ -546,6 +587,29 @@ type TargetStatus struct {
 
 // Status reports the runtime state of one extension. ok is false for a name the
 // store does not hold.
+// livenessOf measures one state's process, using the reconciler's own managers.
+//
+// NIL WHEN THERE IS NOTHING TO MEASURE WITH: a Reconciler built without a session
+// manager (a unit test, a read-only harness) has no channels, and a probe that reported
+// "not alive" for every one of them would be an answer about the harness, not about the
+// extension.
+func (r *Reconciler) livenessOf(st *extState) *Liveness {
+	if r.sessMgr == nil {
+		return nil
+	}
+	return st.probeLiveness(
+		func(shellID string) *session.ChildShell { return r.sessMgr.GetChildShell(shellID) },
+		func(sessionID string) string {
+			if sessionID == "" {
+				return ""
+			}
+			if sess := r.sessMgr.Get(sessionID); sess != nil {
+				return string(sess.Info().Status)
+			}
+			return ""
+		})
+}
+
 func (r *Reconciler) Status(name string) (Status, bool) {
 	// ONE STAT, NOT A DIRECTORY LISTING. This used to call store.List() — a ReadDir
 	// plus a Stat per entry — to answer "is this name configured", so a caller
@@ -586,6 +650,7 @@ func (r *Reconciler) statusOf(name string, ext *Extension) Status {
 		out := parts[0]
 		out.Lazy = ext.Lazy()
 		out.Channels = r.channelStatuses(ext, r.stateFor(name, targets[0].Host))
+		out.Liveness = r.livenessOf(r.stateFor(name, targets[0].Host))
 		return out
 	}
 	out := foldStatus(parts)
@@ -675,7 +740,9 @@ func (r *Reconciler) TargetStatus(name, target string) (Status, bool) {
 	}
 	st := r.stateFor(name, t.Host)
 	r.reapEnded(name, st)
-	return st.snapshot(), true
+	out := st.snapshot()
+	out.Liveness = r.livenessOf(st)
+	return out, true
 }
 
 // List reports every extension's runtime state, sorted the way the store sorts

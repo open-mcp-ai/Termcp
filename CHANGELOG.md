@@ -176,6 +176,14 @@
 - **标题栏就是控制行**：反选勾选框与四个钥匙操作都在标题右边。它们原来待的那一行会按钥匙数量收起，于是空钥匙链——新装第一次打开就是这个状态——没有任何可点的东西。现在面板只有标题栏、列表，以及列表足够长时才出现的筛选框。**勾选的颜色也回到主题画布色**：对话框里给文本框写的规则曾把勾画成正文颜色，于是浅色主题是深色勾、深色主题是浅色勾；四个主题实测勾色现在等于各自的 `--bg-canvas`。
 ### Added
 
+- `get ext` reports reconciliation fields beside the status word: `liveness` (a probe
+  taken at reply time — `alive` read from the channel's own transport, `checked_at`,
+  `session_status`, `exit_code` once it exits, and `pid_unknown` naming why no pid is
+  claimed: the process runs on the target host and SSH carries none), `restarts` (how
+  many times it came back up after going down, counted on the transition, not on every
+  bring-up) and `last_active_at`. A status string is the reconciler's belief; these are
+  measurements, and a closed channel now says it closed rather than reading as one that
+  never had a process.
 - Drive-prefixed Windows paths written with backslashes (`C:\tc\a.txt`,
   `/C:\tc\a.txt`) are rewritten to the POSIX wire form (`/C:/tc/a.txt`) before
   whitelist checks and file operations across `term`, file tools, `read … | write …`
