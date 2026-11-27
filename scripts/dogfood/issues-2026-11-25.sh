@@ -806,6 +806,20 @@ else
   FAIL=$((FAIL+1)); FAILED_NAMES+=("#358 被拒后没有字节落盘"); printf '   \033[31mFAIL\033[0m %s\n' "#358 被拒后没有字节落盘"
 fi
 
+# ---------------------------------------------------------------------------
+# #269 #1 — 空正文的回执不能宣称交付了字节
+echo
+echo "== #269 空窗口不谎报范围"
+H269=$(body "$(term "connect internal --name e269")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+E269=$(termj "$(python3 -c 'import json,sys
+print(json.dumps({"cmd":"run "+sys.argv[1]+" $1","args":["sleep 1"],"timeout":0.05}))' "$H269")")
+check "#269 空窗口是 204" "$E269" '"code":204'
+check "#269 范围说没交付" "$E269" 'bytes */'
+check_not "#269 不再宣称交付了区间" "$E269" 'bytes 0-'
+check "#269 仍给重读位置" "$E269" '"Input-At"'
+L269=$(body "$(term "read $H269 --timeout 1" 2>/dev/null || true)")
+term "close $H269" >/dev/null
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi

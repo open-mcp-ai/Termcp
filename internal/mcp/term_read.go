@@ -878,8 +878,25 @@ func (s *Server) windowSlot(stmt directive.Statement, win termArgs, doc map[stri
 		headers["Folded"] = fmt.Sprintf("bytes %d-%d of %d; read --cursor %d", start, total-1, total, start)
 	}
 
+	// DELIVERED OR ACCOUNTED FOR, NEVER "THE WINDOW COVERED BYTES" (issue #269 #1).
+	//
+	// This used to be `len(body) > 0 || end > start`, and `end > start` is true whenever
+	// the window covered bytes — including a window that covered ONLY the pty's echo of
+	// the line plus its bracketed-paste escape, which the text path strips to nothing.
+	// The measured reply was `200`, an empty body, and `Content-Range: bytes 314-335/336`:
+	// "22 bytes here", zero delivered, in a 200 that a caller cannot tell apart from a
+	// truncated one. The reporter of #269 followed exactly that header and lost the
+	// window it named.
+	//
+	// The two ways bytes can be absent from the body WITHOUT the reply lying are the ones
+	// that name them: `fold` says `Folded: bytes A-B of T; read --cursor A` (the bytes are
+	// still there to fetch), and a `--stream` filter says `Omitted: N bytes … went past
+	// unseen`. Both are deliberate and both are visible, so their 200/206 and their range
+	// stay. Anything else with an empty body is "nothing yet" — 204, and a position that
+	// did not move.
+	omitted := int64(getFloatAny(doc, "stream_omitted_bytes", 0)) > 0
+	hasBytes := len(body) > 0 || truncated || omitted
 	code := 200
-	hasBytes := len(body) > 0 || end > start
 	switch {
 	case hasBytes && (truncated || boolAny(doc, "has_more")):
 		code = 206
