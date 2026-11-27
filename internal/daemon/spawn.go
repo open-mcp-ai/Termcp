@@ -7,13 +7,12 @@
 package daemon
 
 import (
-	"fmt"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/config"
+	pkgdaemon "github.com/open-mcp-ai/termcp/pkg/daemon"
 )
 
 // ChildArgs builds the command-line flags for the detached instance. The
@@ -86,33 +85,10 @@ func filterEnv(env, prefixes []string) []string {
 	return out
 }
 
-// spawn starts the detached instance: stdin from the null device, stdout and
-// stderr appended to the daemon log, and no wait — the child outlives this
-// process.
+// spawn starts the detached instance through pkg/daemon, so the redirect-and-detach
+// recipe exists once (issue #309).
 func spawn(exe string, args, env []string, logPath string) (int, error) {
-	devnull, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
-	if err != nil {
-		return 0, fmt.Errorf("open %s: %w", os.DevNull, err)
-	}
-	defer devnull.Close()
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return 0, fmt.Errorf("open log %s: %w", logPath, err)
-	}
-	defer logFile.Close()
-
-	cmd := exec.Command(exe, args...)
-	cmd.Env = env
-	cmd.Stdin = devnull
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	detach(cmd)
-	if err := cmd.Start(); err != nil {
-		return 0, fmt.Errorf("start %s: %w", exe, err)
-	}
-	pid := cmd.Process.Pid
-	_ = cmd.Process.Release() // never wait: the child is detached
-	return pid, nil
+	return pkgdaemon.Spawn(exe, args, env, logPath)
 }
 
 func stopQuietly(pid int) {
