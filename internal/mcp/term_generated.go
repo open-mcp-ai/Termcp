@@ -832,6 +832,9 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 		[2]string{"from-path", "from_path"},
 		[2]string{"to-path", "to_path"},
 		[2]string{"data", "data"},
+		[2]string{"grep", "pattern"},
+		[2]string{"name", "name"},
+		[2]string{"glob", "glob"},
 	); bad {
 		return slot
 	}
@@ -871,7 +874,10 @@ func (s *Server) directiveFile(ctx context.Context, stmt directive.Statement, wi
 	// A DIRECTORY READ'S CAPS AND A DIRECTORY WRITE'S SWITCHES (#340). Both are read by
 	// the handlers, so they have to arrive: a flag that parses and is never passed on
 	// answers a different question than the one asked.
-	if slot, bad := numericFlags(args, stmt, [2]string{"depth", "depth"}, [2]string{"limit", "limit"}); bad {
+	if slot, bad := numericFlags(args, stmt,
+		[2]string{"depth", "depth"}, [2]string{"limit", "limit"},
+		[2]string{"context", "context"}, [2]string{"grep-limit", "grep_limit"},
+	); bad {
 		return slot
 	}
 	if boolFlag(stmt, "recursive") {

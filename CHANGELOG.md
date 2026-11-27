@@ -176,6 +176,15 @@
 - **标题栏就是控制行**：反选勾选框与四个钥匙操作都在标题右边。它们原来待的那一行会按钥匙数量收起，于是空钥匙链——新装第一次打开就是这个状态——没有任何可点的东西。现在面板只有标题栏、列表，以及列表足够长时才出现的筛选框。**勾选的颜色也回到主题画布色**：对话框里给文本框写的规则曾把勾画成正文颜色，于是浅色主题是深色勾、深色主题是浅色勾；四个主题实测勾色现在等于各自的 `--bg-canvas`。
 ### Added
 
+- Cross-file `grep`/`find` on `read … file` (#357 §1.1): `--grep RE` now filters a
+  FILE (it parsed and was silently dropped — the whole file came back) and searches a
+  DIRECTORY, answering `path:line:text` with `--glob`/`--context`/`--grep-limit` and a
+  closing line that names what it walked; `--name GLOB` answers the other question
+  (`find`: paths only). Matching happens in this process over the SFTP bytes, so a POSIX
+  host and a Windows one answer identically and a host with `rg` behaves like one
+  without. Every file the walk opens passes the same admission a single read passes
+  (the #358 class), links inside the tree are not followed, and files skipped as too
+  large, binary or refused are named rather than silently missing.
 - `run`: one shell line, no DSL (#319). `{"run": "df -h", "session": "6a29"}` opens a
   one-shot pipe and answers with `exit_code` + stdout; `{"run": "cd /srv", "shell":
   "6a29:1"}` types into an existing interactive shell and keeps its state. The line is

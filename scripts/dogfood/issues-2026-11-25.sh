@@ -850,6 +850,36 @@ print(json.dumps({"cmd":"ls","run":"echo hi","session":sys.argv[1],"timeout":3})
 check "#319 cmd+run 互斥" "$R319C" 'two different command lines'
 term "close $H319" >/dev/null
 
+# ---------------------------------------------------------------------------
+# #357 §1.1 跨文件 grep / find
+echo
+echo "== #357 §1.1 跨文件搜索"
+D357=/tmp/dg-357-$$
+mkdir -p "$D357/sub/deep"
+printf 'alpha\nbeta NEEDLE\ngamma\n' > "$D357/a.txt"
+printf 'x\nNEEDLE here\ny\n' > "$D357/sub/b.go"
+printf 'NEEDLE in log\n' > "$D357/sub/deep/d.log"
+H357=$(body "$(term "connect internal --name r357")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+S357=${H357%%:*}
+R357=$(body "$(term "read $S357 file $D357 --grep NEEDLE")")
+check "#357 跨文件命中有路径与行号" "$R357" "$D357/a.txt:2:beta NEEDLE"
+check "#357 走到子目录" "$R357" "$D357/sub/deep/d.log:1:NEEDLE in log"
+check "#357 结尾说明扫了多少" "$R357" "file(s) under"
+R357G=$(body "$(term "read $S357 file $D357 --grep NEEDLE --glob '*.go'")")
+check "#357 --glob 只搜选中文件" "$R357G" "sub/b.go:2:NEEDLE here"
+check_not "#357 --glob 排除了别处的命中" "$R357G" "a.txt:2"
+R357N=$(body "$(term "read $S357 file $D357 --name '*.log'")")
+check "#357 --name 找到路径" "$R357N" "sub/deep/d.log"
+check_not "#357 --name 不读文件内容" "$R357N" "NEEDLE in log"
+R357C=$(body "$(term "read $S357 file $D357/a.txt --grep NEEDLE --context 1")")
+check "#357 --context 带出上下文行" "$R357C" "1-alpha"
+R357F=$(body "$(term "read $S357 file $D357/a.txt --grep NEEDLE")")
+check_not "#357 单文件 --grep 不再静默忽略" "$R357F" "gamma"
+R357E=$(body "$(term "read $S357 file $D357 --grep ''")")
+check "#357 空模式被拒" "$R357E" "is an empty pattern"
+term "close $H357" >/dev/null
+rm -rf "$D357"
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi

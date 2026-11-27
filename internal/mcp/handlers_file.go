@@ -92,6 +92,16 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 
 	defer sftpCli.Close()
 	defer releaseTransport()
+
+	// CROSS-FILE SEARCH (#357 §1.1). `--grep` on a file read used to parse and then be
+	// dropped: the caller named a filter and the whole file came back, which is the one
+	// answer shape this project refuses to ship. It now means the same thing on a file as
+	// on a directory — match the lines, render `path:line:text` — and `--name` answers the
+	// other question, "which paths are called this".
+	if slot, searched := s.fileSearch(ctx, sftpCli, args, sessionID, remotePath, charset, mode); searched {
+		return slot, nil
+	}
+
 	result, err := sftpCli.ReadFile(remotePath, offset, length, mode, localPath, charset, raw, numbered)
 	if err != nil {
 		// A DIRECTORY IS A LISTING, NOT A FAILED READ (#340).
@@ -103,7 +113,7 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 		// question that was asked — with the entry cap and depth the caller passed, so
 		// a repository with a checked-in dependency tree does not arrive whole.
 		if errors.Is(err, filesftp.ErrIsDirectory) {
-			listing, lerr := sftpCli.ListDir(remotePath, dirLimit(args), dirDepth(args))
+			listing, lerr := sftpCli.ListDir(remotePath, dirLimit(args), searchDepth(args))
 			if lerr != nil {
 				return fileErr(lerr, remotePath), nil
 			}
@@ -115,6 +125,82 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 		return fileErr(err, remotePath), nil
 	}
 	return jsonResult(toMap(result)), nil
+}
+
+// fileSearch answers a `--grep`/`--name` file read, or reports that this read is not one.
+//
+// THE MODE IS CHECKED FIRST: a search answers with TEXT, so `--mode hex` or `--mode file`
+// beside it is two different requests in one call, and the refusal names the flag that has
+// to go. Silently ignoring the mode would answer the search and drop the mode, which is the
+// failure this function exists to end.
+func (s *Server) fileSearch(ctx context.Context, cli *filesftp.Client, args map[string]any,
+	sessionID, remotePath, charset, mode string) (*mcp.CallToolResult, bool) {
+	pattern := getString(args, "pattern", "")
+	nameGlob := getString(args, "name", "")
+	fileGlob := getString(args, "glob", "")
+	// PRESENT-BUT-EMPTY IS NOT ABSENT, and the difference matters here: an empty pattern
+	// matches every line, so `--grep ''` would return the whole file while looking like a
+	// filter. The DSL keeps the two apart (an explicit `--grep ''` sets the argument, an
+	// omitted flag does not), so this is the one place that can refuse it.
+	if v, ok := args["pattern"]; ok && v == "" {
+		return toolError(CodeInvalidArgument, "%s",
+			"`--grep ''` is an empty pattern, and an empty pattern matches every line — it would return the "+
+				"whole file dressed as a search. Give it a regular expression, or read the file without --grep."), true
+	}
+	if v, ok := args["name"]; ok && v == "" {
+		return toolError(CodeInvalidArgument, "%s",
+			"`--name ''` is an empty glob, and an empty glob matches every path — it would list the tree dressed as "+
+				"a search. Give it a pattern (`--name '*.log'`), or read the directory without --name."), true
+	}
+	if pattern == "" && nameGlob == "" {
+		// `--glob`/`--context` WITHOUT a question are refused too: they select what to
+		// search, and there is nothing to select for. Accepting them here would repeat
+		// the exact bug this change fixes, one flag over.
+		if fileGlob != "" || int(getFloat64(args, "context", 0)) > 0 || int(getFloat64(args, "grep_limit", 0)) > 0 {
+			return toolError(CodeInvalidArgument, "%s",
+				"`--glob`, `--context` and `--grep-limit` select or shape a SEARCH, and this call names neither: "+
+					"add `--grep RE` to search contents, or `--name GLOB` to search paths. Without one they would "+
+					"be accepted and change nothing."), true
+		}
+		return nil, false
+	}
+	if mode != "" && mode != "text" {
+		return toolError(CodeInvalidArgument, "%s",
+			"a search answers with text, so `--mode "+mode+"` and `--grep`/`--name` cannot ride in one call. "+
+				"Drop the mode to search, or drop the search to read the "+mode+"."), true
+	}
+	info, statErr := cli.StatFile(remotePath)
+	if statErr != nil {
+		return fileErr(statErr, remotePath), true
+	}
+	f, bad := parseFileSearch(pattern, nameGlob, fileGlob,
+		int(getFloat64(args, "context", 0)), int(getFloat64(args, "grep_limit", 0)), !info.IsDir)
+	if bad != nil {
+		return bad, true
+	}
+	var (
+		lines   []string
+		trailer *searchTrailer
+		err     error
+	)
+	if info.IsDir {
+		lines, trailer, err = s.searchRemoteTree(ctx, cli, sessionID, remotePath, charset, f, dirLimit(args), searchDepth(args))
+	} else {
+		lines, trailer, err = s.searchRemoteFile(cli, remotePath, charset, f)
+	}
+	if err != nil {
+		return fileErr(err, remotePath), true
+	}
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
+	// THE TRAILER IS ALWAYS PRESENT, even with no matches: "0 match(es) in 12 files, depth
+	// 2" is the difference between searching and not looking, and the caller cannot
+	// derive it from an empty body.
+	b.WriteString(trailer.line())
+	return &mcp.CallToolResult{Content: []mcp.TextContent{mcp.NewTextContent(b.String())}}, true
 }
 
 // dirLimit and dirDepth read the two caps a directory listing takes.
@@ -816,4 +902,18 @@ func isWindowsDrivePrefixedPath(p string) bool {
 		return false
 	}
 	return p[3] == '/' || p[3] == '\\'
+}
+
+// searchDepth defaults to 5 for recursive searches (plain directory listings stay at 1)
+// and caps at 10, so `read <session> file /repo --grep …` walks a real source tree
+// without being told a flag.
+func searchDepth(args map[string]any) int {
+	n := int(getFloat64(args, "depth", 0))
+	if n <= 0 {
+		return 5
+	}
+	if n > 10 {
+		return 10
+	}
+	return n
 }

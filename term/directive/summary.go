@@ -47,8 +47,11 @@ var flagSummaries = map[string]map[string]string{
 		"reader":   "registered reader id to consume from; keeps its own cursor independent of the default reader",
 		"mode":     "on a file read: text (default), hex for bytes, or file to download to a local_path",
 		"wait":     "spend the whole timeout on an empty window instead of ending it when the stream goes quiet (valueless)",
-		"depth":    "on a directory read: levels to walk, 1 by default and 5 at most",
+		"depth":    "on a directory read: levels to walk, 1 by default and 5 at most; a SEARCH defaults to 5",
 		"limit":    "on a directory read: entries to return, 200 by default and 2000 at most",
+		"name":     "search FILE NAMES: a glob matched against the base name at any depth (`*.log`)",
+		"glob":     "limit which files --grep searches (`*.go`); a pattern with `/` matches the full path",
+		"context":  "lines kept around each match, like grep -C: 0 by default and 5 at most",
 	},
 }
 

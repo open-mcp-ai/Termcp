@@ -192,13 +192,14 @@ var ops = []Op{
 		Flags: []string{"cursor:number", "reader:number", "since:number", "at:number", "offset:number", "bytes:number",
 			"from-line:number", "tail:number", "stream:enum=o,e,all", "raw", "lines", "grep", "grep-limit:number",
 			"encoding", "frame", "mode", "screen", "top:number", "rows:number", "until", "wait",
-			// A DIRECTORY READ'S TWO CAPS (#340): --limit bounds the rows, --depth the
-			// levels walked. They are declared here rather than invented at the handler
-			// so a misspelling is refused with a usage line.
-			"depth:number", "limit:number"},
+			// A DIRECTORY READ'S CAPS (#340) AND CROSS-FILE SEARCH (#357 §1.1):
+			// --limit bounds rows, --depth bounds levels walked, --name matches file
+			// names, --glob filters which files --grep searches, --context adds the
+			// lines around each match.
+			"depth:number", "limit:number", "name", "glob", "context:number"},
 		Valueless: []string{"raw", "lines", "frame", "screen", "wait"},
 		Usage: "read <session> <index> [--tail N|--from-line N|--cursor N|--reader ID] [--grep RE] [--until RE|exit|prompt]   |   " +
-			"read <session> file <path>   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
+			"read <session> file <path> [--grep RE [--glob G] [--context N]|--name G]   |   read <session> cdp|mcp|jrpc[:N][@target] [--since N] [--grep RE]   |   " +
 			"read <session> cdp:N --at FRAME [--offset BYTES] [--bytes N]   |   " +
 			"read <session> <index> [--tail N]",
 		Detail: readDetail},
@@ -398,7 +399,29 @@ does not know whether its path is a file or a directory does not have to find ou
 
 --limit (default 200) bounds the rows and --depth (default 1) the levels walked.
 Whatever the caps withheld is COUNTED in the reply, because "nothing is there" and
-"you are not being shown" have to read differently. A symbolic link is reported with
+"you are not being shown" have to read differently.
+
+SEARCHING A TREE IS THE SAME CALL (#357). --grep searches FILE CONTENTS and --name
+searches FILE NAMES, on one file or on a directory:
+
+  read a1f3 file /srv/app --grep 'ERROR|FATAL'          every match, path:line:text
+  read a1f3 file /srv/app --grep TODO --glob '*.go'     only Go files
+  read a1f3 file /srv/app --name '*.log'                which paths are called this
+  read a1f3 file /srv/app --grep FIXME --context 2      two lines around each match
+  read a1f3 file /srv/app/main.go --grep panic          one file's contents
+
+The match happens HERE, over the bytes SFTP hands back: there is no remote grep and
+no rg, so a POSIX host and a Windows one answer in the same shape — path:line:text
+for a hit and path-line-text for context, the delimiters grep has always used — and
+a host that has rg behaves exactly like one that does not. A directory search walks
+--depth levels (default 5, cap 10) and --limit entries (default 200); a file bigger
+than 1 MiB, a binary file, and a file your session's paths rule refuses are each
+NAMED in the closing line rather than silently skipped, because "no match" and "did
+not look" must never arrive in the same shape.
+
+--glob filters which files are searched and --context how many lines surround a match
+(cap 5). --grep-limit (default 200, cap 200) bounds the matches. An empty --grep is
+refused: it matches every line and would return the file. A symbolic link is reported with
 its target and never followed — a link pointing at its own parent would loop — and an
 entry that cannot be read (permissions, a broken link) is listed WITH the reason
 rather than dropped.
