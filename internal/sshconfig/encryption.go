@@ -382,6 +382,21 @@ func firstKeyInfo(repo *configstore.Repository) (configstore.KeyInfo, error) {
 
 // PlugKey inserts one key: it unwraps the mnemonic and derives the Main Key into
 // memory, then records `plugged` so the next start does the same by itself.
+/* PlugKeyWithPassphrase is the one-step "use this key": the words go into memory and
+ * every host sealed by the key is activated with the passphrase, which is asked once
+ * for both. See Repository.PlugKeyWithPassphrase for why the two are one action. */
+func (s *Store) PlugKeyWithPassphrase(id configstore.ID, passphrase string, providers ...configstore.Provider) error {
+	repo := s.repositorySnapshot()
+	if repo == nil {
+		return configstore.ErrNotInitialized
+	}
+	if err := repo.PlugKeyWithPassphrase(id, passphrase, providers...); err != nil {
+		return err
+	}
+	s.notifyChange()
+	return nil
+}
+
 func (s *Store) PlugKey(id configstore.ID, providers ...configstore.Provider) error {
 	repo := s.repositorySnapshot()
 	if repo == nil {

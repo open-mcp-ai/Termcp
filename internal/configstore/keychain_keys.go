@@ -285,6 +285,48 @@ func (r *Repository) PlugKey(id ID, providers ...Provider) error {
 	return r.loadRefs()
 }
 
+/* PlugKeyWithPassphrase inserts one key AND turns on the second layer of every host
+ * it seals, in the same step.
+ *
+ * The two used to be separate decisions, and the first one alone leaves a state that
+ * looks finished and is not: the panel says the key is loaded, every host it seals
+ * says "not activated", and nothing can be read. A passphrase-carrying key needs its
+ * passphrase for exactly one of those steps, so it is asked once and spent on both.
+ *
+ * A wrong passphrase changes nothing: the insert is rolled back, because "loaded but
+ * unable to open anything" is the state this method exists to remove — a person who
+ * typed it wrong should be left where they started, not half way.
+ *
+ * A key with no passphrase needs nothing here: inserting it restores its hosts from
+ * their `active` markers, which is what the boolean layer is.
+ */
+func (r *Repository) PlugKeyWithPassphrase(id ID, passphrase string, providers ...Provider) error {
+	if err := r.PlugKey(id, providers...); err != nil {
+		return err
+	}
+	stored, err := r.readKeyringFile()
+	if err != nil {
+		return err
+	}
+	key, known := storedKeyByID(stored, id)
+	if !known || !keyHasPassphrase(key) {
+		return nil
+	}
+	names := r.hostsForKey(id, 0)
+	if len(names) == 0 {
+		/* Nothing to activate, and nothing to prove the passphrase against either:
+		   a key that seals no host has no second layer yet. */
+		return nil
+	}
+	if _, err := r.Activate(names, map[ID]string{id: passphrase}); err != nil {
+		if rollback := r.UnplugKey(id); rollback != nil {
+			return errors.Join(err, rollback)
+		}
+		return err
+	}
+	return nil
+}
+
 // UnplugKey drops one key's material from memory and records `plugged=false`.
 // Profiles sealed by it stop being readable until it is plugged in again; nothing
 // is deleted, and its activation keys go with it — the second layer of a host

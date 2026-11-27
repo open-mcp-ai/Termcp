@@ -211,7 +211,6 @@ _configStorageRoot.innerHTML = [
   '<button type="button" id="modal-activate-close" class="modal-x" title="Close" data-i18n-title="common.close"><svg viewBox="0 0 12 12" width="12" height="12"><path fill="none" stroke="currentColor" stroke-width="1.5" d="M2 2l8 8M10 2L2 10"/></svg></button>',
   '</div><div class="modal-body">',
   '<p id="modal-activate-err" class="err" style="display:none"></p>',
-  '<p class="conn-field-hint" id="modal-activate-hint"></p>',
   '<div id="modal-activate-fields"></div>',
   '<div class="modal-actions"><button type="button" class="btn" id="modal-activate-cancel" data-i18n="common.cancel">Cancel</button>',
   '<button type="button" class="btn btn-primary" id="modal-activate-ok" data-i18n="common.done">Done</button></div>',
@@ -792,6 +791,21 @@ function configStorageKeyAction(id, action, key) {
       });
       return;
     case 'plug':
+      if (key && key.passphrase) {
+        /* A passphrase-carrying key is not usable without its passphrase, so the
+           press asks for it here and the server spends it on both layers: the words
+           go into memory AND every host the key seals is activated. Loading the words
+           alone used to report success while every host still said "not activated". */
+        configStoragePromptSecret({
+          title: t('storage.loadPassphraseTitle', {name: configStorageKeyLabel(key)}),
+          okText: t('storage.keyPlug')
+        }).then(function (passphrase) {
+          if (passphrase === null) return;
+          options.body = JSON.stringify({passphrase: passphrase});
+          configStorageRunKeyAction(path + '/plug', options, action, function () { configStorageActivatedToast(key.hosts); });
+        });
+        return;
+      }
       path += '/plug';
       break;
     case 'unplug':
@@ -801,7 +815,7 @@ function configStorageKeyAction(id, action, key) {
   configStorageRunKeyAction(path, options, action);
 }
 
-function configStorageRunKeyAction(path, options, action) {
+function configStorageRunKeyAction(path, options, action, onDone) {
   /* `_configStorageBusy` repaints the panel with every control disabled, and it is
      for a DESTRUCTIVE action: it stops a second click landing on something that
      cannot be undone. Plugging is a toggle — idempotent, one request, two clicks are
@@ -817,6 +831,7 @@ function configStorageRunKeyAction(path, options, action) {
   configStorageRequest(path, options).then(function (payload) {
     configStorageApplyPayload(payload);
     if (typeof loadConnections === 'function') loadConnections();
+    if (onDone) onDone();
   }).catch(function (err) {
     /* Insert/remove is a switch, not a workflow: if the kernel refused, toast it
        briefly instead of staining the top of the dialog with red text. */
@@ -1121,7 +1136,7 @@ function configStoragePickKey(names) {
   });
 }
 
-function configStorageConvert(action, names) {
+function configStorageConvert(action, names, options) {
   names = names || [];
   var state = _configStorageState || {};
   if (typeof _nodeBatch !== 'undefined' && _nodeBatch) _nodeBatch.closeMenu();
@@ -1136,12 +1151,17 @@ function configStorageConvert(action, names) {
     return;
   }
   if (action === 'activate') {
-    configStorageOpenActivate(names);
+    configStorageOpenActivate(names, options);
     return;
   }
   if (action === 'deactivate') {
-    var titleOff = t('storage.deactivateTitle');
-    confirmDialog({title: titleOff, message: tCount('storage.deactivateConfirm.one', 'storage.deactivateConfirm.other', {count: names.length}), okText: titleOff}).then(function (ok) {
+    /* One host pressed on its own card is not a selection: the batch sentence would
+       describe a set the person never made, and the title would have to be read twice
+       to know which host is about to shut. */
+    var titleOff = (options && options.title) || t('storage.deactivateTitle');
+    var messageOff = (options && options.message) ||
+      tCount('storage.deactivateConfirm.one', 'storage.deactivateConfirm.other', {count: names.length});
+    confirmDialog({title: titleOff, message: messageOff, okText: titleOff}).then(function (ok) {
       if (!ok) return;
       configStoragePostBatch('/api/config-storage/deactivate', {names: names}, function () {
         showCopyToast(tCount('storage.deactivated.one', 'storage.deactivated.other', {count: names.length}));
@@ -1166,7 +1186,7 @@ function configStorageConvert(action, names) {
         : Promise.resolve('');
       return ask.then(function (passphrase) {
         if (passphrase === null) return;
-        var titleOn = t('storage.encryptTitle');
+        var titleOn = (options && options.title) || t('storage.encryptTitle');
         var messageOn = tCount('storage.encryptConfirm.one', 'storage.encryptConfirm.other', {count: names.length}) +
           ' ' + t('storage.encryptWithKey', {key: configStorageKeyLabel(key)});
         confirmDialog({title: titleOn, message: messageOn, okText: titleOn}).then(function (ok) {
@@ -1183,7 +1203,7 @@ function configStorageConvert(action, names) {
     });
     return;
   }
-  var title = t('storage.restoreTitle');
+  var title = (options && options.title) || t('storage.restoreTitle');
   var message = tCount('storage.restoreConfirm.one', 'storage.restoreConfirm.other', {count: names.length});
   confirmDialog({title: title, message: message, okText: title}).then(function (ok) {
     if (!ok) return;
@@ -1239,7 +1259,101 @@ function configStorageActivateGroups(names) {
   return groups;
 }
 
-function configStorageOpenActivate(names) {
+/* The batch dialog is titled "Activate selected hosts" and says "selected" in its
+   hint, both true when it comes from the selection bar. Arriving from one card,
+   nothing is selected — the same words would describe a set the person never made,
+   so the single-host call supplies its own title and hint. */
+/* Says how many hosts a key just made readable, or nothing when it seals none: a
+   toast about zero hosts is a sentence with no subject. */
+function configStorageActivatedToast(count) {
+  if (!count || count < 1) return;
+  showCopyToast(tCount('storage.activated.one', 'storage.activated.other', {count: count}));
+}
+
+/* Re-reads the three views one operation can change: the storage state (which host
+   is readable), the keychain (which key is in memory) and the grid (what each card
+   can do). One helper because an operation that refreshes two of them is how the
+   panel and the column start disagreeing. */
+function configStorageRefreshViews() {
+  return loadConfigStorage()
+    .then(function () { return loadConfigStorageKeys(); })
+    .then(function () {
+      if (typeof loadConnections === 'function') loadConnections();
+      if (typeof _nodeBatch !== 'undefined' && _nodeBatch) _nodeBatch.update();
+    });
+}
+
+/* ONE PRESS ON A HOST THAT CANNOT BE READ DOES THE WHOLE JOB.
+ *
+ * The press means "make this host work", and that takes two layers: its key in
+ * memory, and the host's own second layer on. Which ones are missing decides what
+ * happens, and only the passphrase can need an answer:
+ *
+ *   key not in memory, key has a passphrase -> ask once; that answer inserts the key
+ *                                              AND activates every host it seals, so
+ *                                              this host comes up with the rest
+ *   key not in memory, no passphrase        -> insert it and activate, silently
+ *   key in memory, host not activated       -> activate; the passphrase is asked for
+ *                                              in the activate dialog when there is one
+ *
+ * There is no path that answers with the keychain panel: a key the person has to go
+ * load by hand is a step this press can take itself, and the panel is for the keys
+ * THEMSELVES — creating, renaming, deleting — not for a host they happen to seal.
+ */
+function configStorageUnlockHost(name) {
+  var host = null;
+  ((_configStorageState && _configStorageState.hosts) || []).forEach(function (h) { if (h.name === name) host = h; });
+  if (!host || host.mode !== 'encrypted') { openConfigStorage(); return; }
+  if (host.orphaned) { showCopyToast(t('storage.hostOrphaned')); return; }
+  var key = configStorageDetailKey(host.key_id);
+  if (!key) { openConfigStorage(); return; }
+  if (key.plugged && host.activated) {
+    /* The caption on a host that is already readable offers the way back. The two
+       halves of the second layer live in the same slot: the label says which state the
+       host is in, and the press moves it to the other one. */
+    configStorageConvert('deactivate', [name], {
+      title: t('storage.deactivateOneTitle', {name: name}),
+      message: t('storage.deactivateOneMessage')
+    });
+    return;
+  }
+  if (!key.passphrase) {
+    /* Nothing to ask for anywhere, so nothing is asked: insert the key when it is
+       out, activate this host, and say so. */
+    var insert = key.plugged
+      ? Promise.resolve()
+      : configStorageRequest('/api/keychain/' + encodeURIComponent(key.id) + '/plug', {method: 'POST'})
+          .then(function (payload) { configStorageApplyPayload(payload); });
+    insert.then(function () {
+      return configStoragePostBatch('/api/config-storage/activate', {names: [name], passphrases: {}}, function () {
+        configStorageActivatedToast(1);
+      });
+    }).catch(function (err) { showCopyToast(configStorageFailure(err)); });
+    return;
+  }
+  if (key.plugged) { configStorageOpenActivate([name], configStorageOneHostOptions(name)); return; }
+  configStoragePromptSecret({
+    title: t('storage.loadPassphraseTitle', {name: configStorageKeyLabel(key)}),
+    okText: t('storage.keyPlug')
+  }).then(function (passphrase) {
+    if (passphrase === null) return;
+    return configStorageRequest('/api/keychain/' + encodeURIComponent(key.id) + '/plug', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json; charset=utf-8'},
+      body: JSON.stringify({passphrase: passphrase})
+    }).then(function (payload) {
+      configStorageApplyPayload(payload);
+      return configStorageRefreshViews();
+    }).then(function () { configStorageActivatedToast(key.hosts); });
+  }).catch(function (err) { showCopyToast(configStorageFailure(err)); });
+}
+
+function configStorageOneHostOptions(name) {
+  return {title: t('storage.activateOneTitle', {name: name})};
+}
+
+function configStorageOpenActivate(names, options) {
+  options = options || {};
   var groups = configStorageActivateGroups(names);
   if (!groups.length) { showCopyToast(t('storage.selectAtLeastOne')); return; }
   var fields = document.getElementById('modal-activate-fields');
@@ -1251,7 +1365,11 @@ function configStorageOpenActivate(names) {
     var field = document.createElement('div');
     field.className = 'conn-field';
     var label = document.createElement('label');
-    label.textContent = t('storage.passphraseForKey', {key: keyDisplayName(group.keyId), count: String(group.names.length)});
+    /* "Passphrase for key work (1 host)" is what counting to one sounds like; the
+       count is only worth saying when it is a surprise. */
+    label.textContent = group.names.length === 1
+      ? t('storage.passphraseForKey.one', {key: keyDisplayName(group.keyId)})
+      : t('storage.passphraseForKey', {key: keyDisplayName(group.keyId), count: String(group.names.length)});
     var input = document.createElement('input');
     input.type = 'password';
     input.autocomplete = 'off';
@@ -1260,10 +1378,7 @@ function configStorageOpenActivate(names) {
     field.appendChild(input);
     fields.appendChild(field);
   });
-  document.getElementById('modal-activate-hint').textContent = needed
-    ? t('storage.activateHint', {count: String(names.length)})
-    : t('storage.activateNoPassphrase', {count: String(names.length)});
-  document.getElementById('modal-activate-title').textContent = t('storage.activateTitle');
+  document.getElementById('modal-activate-title').textContent = options.title || t('storage.activateTitle');
   document.getElementById('modal-activate-err').style.display = 'none';
   var ok = document.getElementById('modal-activate-ok');
   ok.onclick = function () { configStorageSubmitActivate(names); };
@@ -1850,23 +1965,33 @@ installMaskToggle();
    closed one restores it. Delegated rather than bound per card because the grid
    repaints on every connection refresh. In selection mode the click still belongs
    to the batch bar — a tick is what a card press means there. */
-/* Why this card cannot be reached, in the person's language. The card already
-   says "locked"; a click is the natural place to say which lock and what opens it,
-   because that is the moment the question is being asked. */
+/* The caption does the thing it names, and so does the card body: one press asks
+   for whatever only the person knows and then makes the host readable. Both states
+   on the caption — key not loaded, host not activated — lead to the same function,
+   because they are two reasons for one intention ("use this host"), and a press that
+   only explains the reason leaves the person to go find the door. */
 document.getElementById('conn-grid').addEventListener('click', function (event) {
   var reason = event.target.closest('[data-lock-reason]');
   if (!reason) return;
+  /* In selection mode a card press is a tick and the batch bar owns the actions. */
+  if (typeof _nodeBatch !== 'undefined' && _nodeBatch && _nodeBatch.isOn()) return;
   event.stopPropagation();
-  var kind = reason.getAttribute('data-lock-reason');
-  showCopyToast(kind === 'not_activated' ? t('storage.cardInactiveHint') : t('storage.cardLockedHint'));
+  var name = reason.getAttribute('data-conn-name');
+  if (name) configStorageUnlockHost(name);
 });
 document.getElementById('conn-grid').addEventListener('click', function (event) {
   var mark = event.target.closest('.conn-storage-mark');
   if (!mark) return;
   if (typeof _nodeBatch !== 'undefined' && _nodeBatch && _nodeBatch.isOn()) return;
   event.stopPropagation();
-  configStorageConvert(mark.getAttribute('data-storage') === 'encrypted' ? 'restore' : 'encrypt',
-    [mark.getAttribute('data-conn-name')]);
+  /* One host, so the dialog names it: "the selected host" is a sentence about a set,
+     and this press selected nothing. The verb is the padlock's own — the person
+     pressed 加锁, not 加密. */
+  var markName = mark.getAttribute('data-conn-name');
+  var isSealed = mark.getAttribute('data-storage') === 'encrypted';
+  configStorageConvert(isSealed ? 'restore' : 'encrypt', [markName], {
+    title: isSealed ? t('storage.unlockOneTitle', {name: markName}) : t('storage.lockOneTitle', {name: markName})
+  });
 });
 new MutationObserver(function () {
   if (document.getElementById('modal-config-storage').classList.contains('hidden')) {

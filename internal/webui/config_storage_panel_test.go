@@ -44,19 +44,25 @@ func TestConfigStorageBusyNeverLatchesDisabled(t *testing.T) {
 	}
 }
 
-/* The panel must not reintroduce the vocabulary of the model it replaced. A user
- * who reads "locked" looks for a lock to release; there is none, only keys that
- * are or are not loaded.
+/* The panel must not reintroduce the vocabulary of the model it replaced. "上锁"
+ * meant the old model's keychain-level lock, which does not exist any more: there
+ * are keys that are or are not loaded.
  *
- * Mutation check: adding any of these words back to the panel's copy or markup
- * fails the assertion.
+ * "解锁" is not on the list, and the reason is the card. Storage mode is a padlock
+ * the person clicks — 已加锁 / 未加锁, 解锁为明文 — and that padlock is a different
+ * control from the second layer (钥匙未载入 / 未激活 / 已激活). Banning the word
+ * banned the padlock's own verb; what the old model did with it (bind this machine,
+ * hold a password) is what the list is for.
+ *
+ * Mutation check: adding "上锁" back to the panel's copy or markup fails the
+ * assertion.
  */
 func TestKeychainPanelHasNoLockVocabulary(t *testing.T) {
 	body := readAssetLF(t, "static/js/config-storage.js")
 	// Only the panel's user-visible strings matter; the module also answers server
 	// codes, and those names are the wire contract, not copy.
 	for _, banned := range []string{
-		"上锁", "解锁", "绑定本机",
+		"上锁", "绑定本机",
 		"data-i18n=\"storage.lock", "data-i18n=\"storage.unlock",
 	} {
 		if strings.Contains(body, banned) {
@@ -80,10 +86,47 @@ func TestKeychainPanelHasNoLockVocabulary(t *testing.T) {
 			if !strings.HasPrefix(key, "storage.") {
 				continue
 			}
-			for _, banned := range []string{"密码", "上锁", "解锁", "绑定本机"} {
+			for _, banned := range []string{"密码", "上锁", "绑定本机"} {
 				if strings.Contains(value, banned) {
 					t.Fatalf("%s/%s says %q: %q", lang, key, banned, value)
 				}
+			}
+		}
+	}
+}
+
+/* A press on one card is not a selection.
+ *
+ * The padlock changes one host's storage form, so its dialog names that host: "the
+ * selected host" is a sentence about a set the person never made, and the person
+ * pressed 加锁/解锁 — the dialog answering 加密/还原 was a second vocabulary for the
+ * same action, on the surface that shows the first one.
+ *
+ * Mutation check: drop the options argument at the call site and the first half fails;
+ * drop `(options && options.title) ||` in either dialog and the second half does.
+ */
+func TestThePadlockNamesTheHostItChanges(t *testing.T) {
+	panel := readAssetLF(t, "static/js/config-storage.js")
+	handler := panel[strings.Index(panel, "var mark = event.target.closest('.conn-storage-mark')"):]
+	handler = handler[:strings.Index(handler, "new MutationObserver")]
+	for _, want := range []string{"'storage.lockOneTitle'", "'storage.unlockOneTitle'"} {
+		if !strings.Contains(handler, want) {
+			t.Errorf("the padlock press opens a batch dialog: %s is never used", want)
+		}
+	}
+	for _, want := range []string{
+		"var titleOn = (options && options.title) || t('storage.encryptTitle');",
+		"var title = (options && options.title) || t('storage.restoreTitle');",
+	} {
+		if !strings.Contains(panel, want) {
+			t.Errorf("the dialog ignores the host it was opened for: %q", want)
+		}
+	}
+	cat := loadCatalogs(t)
+	for lang, entries := range cat {
+		for _, key := range []string{"storage.lockOneTitle", "storage.unlockOneTitle"} {
+			if v, ok := entries[key]; !ok || !strings.Contains(v, "{name}") {
+				t.Errorf("%s/%s does not name the host (%q)", lang, key, v)
 			}
 		}
 	}
@@ -574,6 +617,19 @@ func TestTheLockedCaptionSitsOnTheProtocolRow(t *testing.T) {
 			t.Errorf("the caption does not use %q: the glyph no longer says which key is missing", want)
 		}
 	}
+	/* The third state is the readable one, and it is the same slot: a host that is
+	   activated can be deactivated, and the caption is where that lives. The address
+	   is replaced only while the host cannot be read — an activated host keeps its
+	   address and wears the state beside it. */
+	if !strings.Contains(calls, "SVG_KEY, t('storage.cardActive')") {
+		t.Error("an activated host has no caption, so the card cannot offer the way back")
+	}
+	if !strings.Contains(calls, "var shut = !!(c.key_unloaded || c.not_activated);") {
+		t.Error("the address is hidden by a state that is not shut, or by none at all")
+	}
+	if !strings.Contains(panel, "(shut ? '' : (addr ?") {
+		t.Error("the address line no longer follows the shut states")
+	}
 	glyphs := readAssetLF(t, "static/js/util.js")
 	for _, want := range []string{"var SVG_KEY =", "var SVG_KEY_SLASHED ="} {
 		if !strings.Contains(glyphs, want) {
@@ -588,8 +644,9 @@ func TestTheLockedCaptionSitsOnTheProtocolRow(t *testing.T) {
 		}
 	}
 
-	/* The caption is a question, not a door. A card press would open the keychain
-	   behind the toast, so the card's own handler has to step aside for it. */
+	/* The caption is a door, and the card's own handler steps aside for it so one
+	   press opens one dialog. The caption's handler lives in config-storage.js and is
+	   pinned by TestALockedHostOpensInOnePress. */
 	if !strings.Contains(panel, "e.target.closest('.node-addr.is-locked')") {
 		t.Error("a click on the caption also fires the card's connect path")
 	}
@@ -751,5 +808,162 @@ func TestTheMaskGlyphNamesTheActionItsLabelNames(t *testing.T) {
 	panel := readAssetLF(t, "static/js/config-storage.js")
 	if !strings.Contains(panel, "btn.setAttribute('aria-pressed', masked ? 'false' : 'true')") {
 		t.Error("paintMaskToggle no longer makes pressed mean visible")
+	}
+}
+
+/* A press on a host that cannot be read DOES the job, it does not describe it.
+ *
+ *   key not in memory, passphrase    -> ask once; that answer inserts the key AND
+ *                                       activates every host it seals
+ *   key not in memory, no passphrase -> insert and activate, silently
+ *   key in memory, host not activated-> activate it
+ *
+ * The card body and the caption both go there, because those are the two places a
+ * person presses. Nothing here opens the keychain panel: a key the press can insert
+ * itself is a step the press takes itself, and the panel is for the keys themselves
+ * (create, rename, delete), not for a host one of them happens to seal.
+ *
+ * Mutation checks: (1) point the caption back at the keychain panel and the first
+ * assertion fails; (2) make the card body open the keychain again and the third
+ * fails; (3) drop the passphrase question and the fourth fails; (4) stop asking on
+ * the key row's plug button and the sixth fails.
+ */
+func TestALockedHostOpensInOnePress(t *testing.T) {
+	panel := readAssetLF(t, "static/js/config-storage.js")
+
+	caption := panel[strings.Index(panel, "document.getElementById('conn-grid').addEventListener('click'"):]
+	next := strings.Index(caption, "var mark = event.target.closest('.conn-storage-mark')")
+	if next < 0 {
+		t.Fatal("the lock's click handler moved; this test would slice to the end of the file")
+	}
+	caption = caption[:next]
+	if !strings.Contains(caption, "configStorageUnlockHost(name)") {
+		t.Error("a press on the state caption no longer unlocks the host")
+	}
+	if strings.Contains(caption, "showCopyToast") {
+		t.Error("the caption explains itself instead of acting")
+	}
+	/* One dialog per press: in selection mode the card is a tick and the batch bar
+	   owns the actions on the ticked set. */
+	if !strings.Contains(caption, "_nodeBatch.isOn()) return;") {
+		t.Error("the caption ignores selection mode: one press would open a dialog and tick a card")
+	}
+
+	cards := readAssetLF(t, "static/js/dialogs.js")
+	body := cards[strings.Index(cards, "inner.addEventListener('click'"):]
+	body = body[:strings.Index(body, "startSessionAndOpenShell")]
+	if !strings.Contains(body, "configStorageUnlockHost(c.name)") {
+		t.Error("a press on the card body still goes somewhere other than the unlock")
+	}
+	if strings.Contains(body, "showModal('modal-config-storage')") {
+		t.Error("the card body still opens the keychain, which answers a question the press did not ask")
+	}
+
+	/* The unlock itself: at most one answer from the person, and the silent path
+	   really is silent. */
+	unlock := panel[strings.Index(panel, "function configStorageUnlockHost"):]
+	unlock = unlock[:strings.Index(unlock, "function configStorageOneHostOptions")]
+	if !strings.Contains(unlock, "if (!key.passphrase) {") {
+		t.Error("the unlock asks a passphrase question even when the key has none")
+	}
+	if !strings.Contains(unlock, "/plug', {method: 'POST'}") {
+		t.Error("the silent path no longer inserts the key that is out of memory")
+	}
+	if !strings.Contains(unlock, "body: JSON.stringify({passphrase: passphrase})") {
+		t.Error("the one-step path no longer sends the passphrase with the insert, so the hosts stay shut")
+	}
+	for _, want := range []string{
+		"configStoragePromptSecret({",
+		"configStoragePostBatch('/api/config-storage/activate'",
+	} {
+		if !strings.Contains(unlock, want) {
+			t.Errorf("the unlock no longer reaches %q", want)
+		}
+	}
+
+	/* The key row's own button asks too: loading a passphrase key without it is the
+	   half-done state the one-step flow exists to remove. */
+	action := panel[strings.Index(panel, "function configStorageKeyAction"):]
+	action = action[:strings.Index(action, "function configStorageRunKeyAction")]
+	plug := action[strings.Index(action, "case 'plug':"):]
+	plug = plug[:strings.Index(plug, "case 'unplug':")]
+	if !strings.Contains(plug, "key.passphrase") || !strings.Contains(plug, "configStoragePromptSecret(") {
+		t.Error("the plug button loads a passphrase key without asking for its passphrase")
+	}
+	if !strings.Contains(plug, "configStorageActivatedToast(key.hosts)") {
+		t.Error("loading a key says nothing about the hosts it just made readable")
+	}
+
+	/* One host is not a selection: the batch wording would describe a set the person
+	   never made. The dialog carries the host's name and nothing else — the hint line
+	   that used to sit above the fields repeated what the title and the label already
+	   say, on a negative margin that ate the block above it. */
+	dialog := panel[strings.Index(panel, "function configStorageOpenActivate"):]
+	dialog = dialog[:strings.Index(dialog, "function configStorageSubmitActivate")]
+	if !strings.Contains(dialog, "options.title ||") {
+		t.Error("the activate dialog ignores the host name it was opened for")
+	}
+	if strings.Contains(dialog, "options.hint") || strings.Contains(dialog, "options.noPassphrase") {
+		t.Error("the activate dialog still renders a hint line above the fields")
+	}
+}
+
+/* Deactivating one host is reachable from the card, not only from the batch bar.
+ *
+ * "Activate" had a one-press door on the card; "deactivate" had only the selection
+ * menu, which is the control the caption used to point at from across the page. The
+ * two halves of the second layer share one slot — the protocol row's caption — so the
+ * label says which state the host is in and the press moves it to the other one. A
+ * second glyph in the title row (a key beside the padlock) was the first attempt, and
+ * it put two answers where the eye expects one: the padlock owns storage, the caption
+ * owns everything about the key.
+ *
+ * Mutation check: drop the `c.storage === 'encrypted'` branch and the first half
+ * fails; point the branch at 'activate' and the second fails.
+ */
+func TestTheCardOffersTheWayBackToInactive(t *testing.T) {
+	cards := readAssetLF(t, "static/js/dialogs.js")
+	calls := cards[strings.Index(cards, "var lockLine ="):]
+	calls = calls[:strings.Index(calls, "tile.innerHTML")]
+	if !strings.Contains(calls, `cardLockLine(c.name, 'activated',`) {
+		t.Fatal("an activated host's caption no longer names the state it is in")
+	}
+	if !strings.Contains(calls, "SVG_KEY, t('storage.cardActive')") {
+		t.Error("the activated caption does not offer the way back")
+	}
+	/* One glyph in the title row: the padlock. A key up there was the second answer,
+	   and the eye reads a row of glyphs as one row of answers. */
+	if strings.Contains(cards, "conn-key-mark") {
+		t.Error("the title row carries a second glyph again")
+	}
+	/* The caption is a button and carries its own handler, so the card body steps
+	   aside for it: one press, one dialog. */
+	if !strings.Contains(cards, "e.target.closest('.node-addr.is-locked')") {
+		t.Error("a click on the caption also fires the card's connect path")
+	}
+
+	panel := readAssetLF(t, "static/js/config-storage.js")
+	unlock := panel[strings.Index(panel, "function configStorageUnlockHost"):]
+	unlock = unlock[:strings.Index(unlock, "function configStorageOneHostOptions")]
+	if !strings.Contains(unlock, "configStorageConvert('deactivate', [name],") {
+		t.Error("the activated caption does not deactivate")
+	}
+	/* And the confirm it opens names the host: "deactivate the selected host" is a
+	   sentence about a set, and this press selected nothing. */
+	if !strings.Contains(unlock, "storage.deactivateOneTitle") {
+		t.Error("the single-host confirm still reads as the batch one")
+	}
+	/* The deactivate branch sits BELOW the doors a shut host needs: a host whose key
+	   is out of memory has to be loaded first, and one that was never activated has
+	   nothing to deactivate. */
+	shut := unlock[:strings.Index(unlock, "if (key.plugged && host.activated)")]
+	if !strings.Contains(shut, "if (host.orphaned)") {
+		t.Error("the deactivate branch swallowed the orphaned door: a host with no key has nothing to deactivate")
+	}
+	/* And it comes BEFORE the doors that activate: an inactive host is a press away
+	   from working, not from being shut. */
+	after := unlock[strings.Index(unlock, "if (key.plugged && host.activated)"):]
+	if !strings.Contains(after, "configStorageOpenActivate([name], configStorageOneHostOptions(name))") {
+		t.Error("the deactivate branch swallowed the activate path")
 	}
 }
