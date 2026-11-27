@@ -643,7 +643,6 @@ var I18N_CATALOG = {
     'storage.keyFilterNone': 'No key named “{needle}”.',
 
     'storage.encryptPassTitle': 'Passphrase for the key',
-    'storage.encryptPassMessage': 'This key carries a passphrase, and the new ciphertext needs it. It is used once here and not written to disk.',
 
     'storage.keySaveName': 'Save name',
 
@@ -1319,7 +1318,6 @@ var I18N_CATALOG = {
     'storage.keyFilterNone': '没有名为「{needle}」的钥匙。',
 
     'storage.encryptPassTitle': '钥匙的口令',
-    'storage.encryptPassMessage': '这把钥匙带口令，新封的密文需要用到它。只在这次使用，不会写进磁盘。',
 
     'storage.keySaveName': '保存名称',
 
@@ -1995,7 +1993,6 @@ var I18N_CATALOG = {
     'storage.keyFilterNone': '沒有名為「{needle}」的鑰匙。',
 
     'storage.encryptPassTitle': '鑰匙的口令',
-    'storage.encryptPassMessage': '這把鑰匙帶口令，新封的密文需要用到它。只在這次使用，不會寫進磁碟。',
 
     'storage.keySaveName': '儲存名稱',
 

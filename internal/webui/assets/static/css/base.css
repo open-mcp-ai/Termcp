@@ -727,11 +727,18 @@
      what each key does, so the choice is made on meaning rather than on which
      word looks safer. Muted, because the question above it is the message. */
   .modal-hint { margin: 0 0 4px; color: var(--text-muted); font-size: .8rem; line-height: 1.5; word-break: break-word; }
-  .conn-field-hint { margin: -8px 0 8px; color: var(--text-secondary); font-size: .7rem; }
-  /* An EMPTY hint is not a hint. It is a paragraph carrying a negative top margin,
-     so leaving one in the DOM pulls the fields up into the block above and leaves a
-     gap below — the layout bug that reads as "the padding is missing". Dialogs write
-     this node from a value that is often empty ("no message for this action"). */
+  /* A hint is a caption for the field above it, and it no longer pulls itself up.
+     The -8px that used to be here only looked right in one position: directly under
+     an input, whose own bottom margin is 12px, so the caption landed 4px below it.
+     In every other position it subtracted from whatever container the hint was in —
+     a dialog whose first line was a hint had its own top padding cancelled, which
+     reads as "the padding is missing" and was reported twice, once for a hint above
+     the passphrase field and once for the same shape in the activate dialog. The
+     field above keeps its margin; the hint keeps 8px below. */
+  .conn-field-hint { margin: 0 0 8px; color: var(--text-secondary); font-size: .7rem; line-height: 1.5; }
+  /* An EMPTY hint is not a hint: an empty paragraph still takes its bottom margin and
+     leaves a gap where a sentence was expected. Dialogs write this node from a value
+     that is often empty ("no message for this action"). */
   .conn-field-hint:empty { display: none; }
   .form-ok { margin: 0 0 8px; white-space: pre-line; color: var(--success-bright); font-size: .82rem; }
   .sess-fwd-info { display: none; margin-top: 2px; color: var(--text-secondary); font-size: .62rem; text-align: center; }

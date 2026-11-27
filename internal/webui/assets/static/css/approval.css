@@ -84,6 +84,12 @@
     border-radius: 3px; accent-color: var(--warning); cursor: pointer;
   }
   .conn-check-hint { font-size: 0.68rem; line-height: 1.35; color: var(--text-muted); }
+  /* A hint captions the checkbox ABOVE it, and the group's flex gap gives it 3px on
+     both sides. Three pixels below a sentence is the gap of a paragraph break, not of
+     a new field, so the next field reads as if the sentence belonged to it (measured:
+     the key row started 3px under "saved encrypted, reading needs the key"). Five more
+     only where a field actually follows, so a hint that ends a group adds nothing. */
+  .conn-check-hint + .conn-field { margin-top: 5px; }
   .conn-row { display: flex; gap: 8px; }
   .conn-row > .conn-field { flex: 1; }
   .jump-chain { margin-top: 6px; }
