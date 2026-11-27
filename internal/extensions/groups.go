@@ -283,8 +283,19 @@ func (r *Reconciler) ensureMemberShell(plan hostPlan, st *extState, sess *sessio
 	if channelName != "" {
 		existing = st.sideShell(channelName)
 	}
-	if shell := liveShell(sess, existing); shell != nil {
-		return shell.ID, nil
+	// A CHANNEL THAT EXITED STILL OWNS ITS LABEL (#322). It is kept, with its output, so
+	// that the handle the caller was given can still be drained — which is right until the
+	// resident needs to start again, because a resident's label is FIXED. Without this the
+	// replacement failed to start with "label already in use" and `open ext <name>` could
+	// never recover a resident whose process had died.
+	if previous := sess.GetChildShell(existing); previous != nil {
+		if previous.Info().Status == api.SessionRunning {
+			return previous.ID, nil
+		}
+		// Archiving keeps the transcript reachable by id; it only frees the label. A
+		// channel another caller already removed is not an error: the label is free either
+		// way.
+		_, _ = r.sessMgr.ArchiveChildShell(previous.ID)
 	}
 	shell, err := sess.CreateChildShell(plan.command, plan.args, plan.pty, plan.rows, plan.cols, plan.channel)
 	if err != nil {

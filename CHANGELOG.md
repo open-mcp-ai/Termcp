@@ -142,6 +142,11 @@
 
 ### Fixed
 
+- A resident extension whose process exits can be started again (#322): the exited
+  channel kept its fixed label for output draining, so `open ext <name>` failed with
+  "label already in use" and the resident was unrecoverable. Recovery archives the exited
+  channel (transcript still readable by id) and a retry now probes instead of detaching —
+  detaching killed the healthy process it was about to find.
 - The `Channel` header now carries an address `read` accepts (#303): `run use:<host>` and
   the one-shot shortcut answered with the shell's internal id, so following the header
   read the session's first channel and returned nothing while the process it started kept
