@@ -789,8 +789,10 @@ func (r *Reconciler) RetryTarget(name, target string) error {
 		return err
 	}
 	st.want()
-	r.detach(st)
-	st.mark(StatusUnavailable)
+	// THE PROBE REUSES WHAT STILL WORKS (#322). Detaching here closed the extension's
+	// channel and its tunnels before the probe could ask, so a retry of a healthy target
+	// killed the process it was about to find and threw away the transcript that explained
+	// the first failure. The probe archives an exited channel itself.
 	st.resetRetryBudget()
 	r.retryTargetNow(name, ext.Target)
 	return nil
