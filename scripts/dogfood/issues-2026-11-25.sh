@@ -789,6 +789,23 @@ check "#325 带探测时间戳" "$L325" 'checked_at'
 check "#325 带最后活跃时间" "$L325" 'last_active_at'
 term "close $H325" >/dev/null
 
+# ---------------------------------------------------------------------------
+# #358 — read … | write … 管道不再绕过扩展的 paths 白名单与能力位
+echo
+echo "== #358 管道准入与白名单"
+mkdir -p "$WORK/ro358"
+printf 'OUTSIDE-358\n' > "$WORK/outside358.txt"
+term "create ext ro358 --target internal --paths $WORK/ro358" >/dev/null
+body "$(term "open ext ro358")" >/dev/null
+SID358=$(body "$(term "get ext ro358")" | grep -oE 'session_id: [0-9a-f]+' | awk '{print $2}')
+R358P=$(term "read $SID358 file $WORK/outside358.txt | write $SID358 file $WORK/ro358/leak.txt")
+check "#358 越界读在管道里也被 403 拒绝" "$R358P" '"code":403'
+if [ ! -e "$WORK/ro358/leak.txt" ]; then
+  PASS=$((PASS+1)); printf '   \033[32mPASS\033[0m %s\n' "#358 被拒后没有字节落盘"
+else
+  FAIL=$((FAIL+1)); FAILED_NAMES+=("#358 被拒后没有字节落盘"); printf '   \033[31mFAIL\033[0m %s\n' "#358 被拒后没有字节落盘"
+fi
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi
