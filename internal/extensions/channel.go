@@ -429,12 +429,11 @@ func (r *Reconciler) KindOfShell(shellID string) (name, kind string, ok bool) {
 	if shellID == "" {
 		return "", "", false
 	}
-	r.mu.Lock()
-	states := make(map[string]*extState, len(r.states))
-	for key, st := range r.states {
-		states[key] = st
-	}
-	r.mu.Unlock()
+	states := make(map[string]*extState)
+	r.states.Range(func(k, v any) bool {
+		states[k.(string)] = v.(*extState)
+		return true
+	})
 	for _, st := range states {
 		chName, owns := st.channelOfShell(shellID)
 		if !owns {

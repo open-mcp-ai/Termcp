@@ -768,6 +768,27 @@ check_not "#186 且没有被改写" "$LIT186" 'Path-Adapted'
 term "close $H186" >/dev/null
 term "rm ext sp186" >/dev/null
 
+# ---------------------------------------------------------------------------
+# #325 — get ext 的对账字段：liveness 是测量，不是状态字
+echo
+echo "== #325 ext 对账字段"
+printf '#!/bin/sh\nexit 7\n' > "$WORK/die325.sh"; chmod +x "$WORK/die325.sh"
+term "create ext die325 --target internal --command $WORK/die325.sh" >/dev/null
+term "open ext die325" >/dev/null
+sleep 1.5
+D325=$(body "$(term "get ext die325")")
+check "#325 死掉的通道报 alive=false" "$D325" '"alive": false'
+check "#325 死掉的通道说出原因（不是"从未有进程"）" "$D325" 'has closed (exit code 7)'
+check "#325 不谎报 pid" "$D325" 'pid_unknown'
+H325=$(body "$(term "connect internal --name live325")" | grep -oE '[0-9a-f]{12}:[0-9]+' | head -1)
+term "create ext live325b --target internal --command sh --args /dev/stdin" >/dev/null
+body "$(term "open ext live325b")" >/dev/null
+L325=$(body "$(term "get ext live325b")")
+check "#325 活着的通道报 alive=true" "$L325" '"alive": true'
+check "#325 带探测时间戳" "$L325" 'checked_at'
+check "#325 带最后活跃时间" "$L325" 'last_active_at'
+term "close $H325" >/dev/null
+
 echo
 printf '\033[1m== %d passed, %d failed\033[0m\n' "$PASS" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then printf '  failed: %s\n' "${FAILED_NAMES[*]}"; fi

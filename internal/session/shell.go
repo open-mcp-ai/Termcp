@@ -123,6 +123,13 @@ func (cs *ChildShell) exitCodeValue() *int {
 	return &v
 }
 
+// ExitCode returns the process exit code, or nil while it is still running.
+//
+// It is the read half of a value Info() also carries: a caller that asked about ONE
+// channel should not have to build a whole session snapshot to learn it, and the atomic
+// pointer makes the read safe from any goroutine.
+func (cs *ChildShell) ExitCode() *int { return cs.exitCodeValue() }
+
 // setExitCode publishes the process exit code.
 func (cs *ChildShell) setExitCode(code int) { cs.exitCode.Store(&code) }
 
@@ -182,6 +189,17 @@ func (cs *ChildShell) processGone() bool {
 		return false
 	}
 }
+
+// Alive reports whether the process can still run, read from the transport rather than
+// from the published status (issue #325).
+//
+// THE TWO ARE NOT THE SAME FACT, and the difference is the point: Info().Status is what
+// the exit watcher published after draining and sealing, which it does on purpose so a
+// reader that sees `exited` may trust the transcript is complete. A caller asking "is
+// this process still there" is asking a different question — it wants a measurement, not
+// a belief — and it has to be able to get one after the status has gone stale (a wedged
+// transport never publishes anything).
+func (cs *ChildShell) Alive() bool { return !cs.processGone() }
 
 // Done returns a channel that closes once the shell is finalized: the process
 // has exited, its output is drained and sealed, and Status/ExitCode are
