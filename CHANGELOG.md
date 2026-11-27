@@ -123,6 +123,13 @@
 
 ### Fixed
 
+- Background archive restore (#353): `core.New` no longer blocks port binding by
+  loading every archived session manifest before `Listen`. `Start` launches the walk
+  in the background — reading one session directory at a time instead of holding
+  `store.mu.RLock` across the whole archive — and cancels cleanly on `Close`, while
+  re-running `SweepRestored` when it finishes. While the walk is running, `ls` reports
+  `Restoring: done/total` (and says so instead of a bare "(nothing is running)") and
+  `GET /api/daemon` carries `restoring: true` and `restore_progress`.
 - A reply no longer claims bytes it did not deliver (#269 #1): an empty window answered
   `200` with `Content-Range: bytes A-B/N` naming the pty's stripped echo, so a caller
   paging by that header skipped the window it was told it had seen. It is now `204` with

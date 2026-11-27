@@ -1712,7 +1712,10 @@ Response 200:
 ```
 
 `daemon` is `false` on a manually started instance, and `log` is empty unless
-the instance is a daemon. `idle_timeout_ms` is the countdown actually in force
+the instance is a daemon. While the instance is still loading archived sessions
+in the background after startup, the reply also carries `"restoring": true` and
+`"restore_progress": "N/M"` (and `ls` reports `Restoring: N/M`); both disappear
+once the archive has finished loading. `idle_timeout_ms` is the countdown actually in force
 (`0` = it never exits on its own); the `termcp stdio` bridge reads it so it can
 ping faster than the real countdown instead of assuming the default. The route
 sits behind the auth middleware like the rest of `/api/*`.

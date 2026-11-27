@@ -96,6 +96,11 @@ type Handler struct {
 	// response is on the wire.
 	StopDaemon func()
 
+	// Restoring reports the background archive restore (#353): whether it is running, how
+	// many sessions are loaded and how many were found. /api/daemon publishes it so a
+	// client that starts during a restore can tell a short list from a lost archive.
+	Restoring func() (bool, int, int)
+
 	// ExecuteOperation replays an approved non-terminal request (a file transfer,
 	// a port forward). Wired by main to the MCP server, which owns those
 	// operations; nil when no such server exists, in which case only command

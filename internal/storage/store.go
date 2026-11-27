@@ -423,6 +423,46 @@ func (s *Store) LoadSessions() ([]api.Session, error) {
 	return out, nil
 }
 
+// ListSessionIDs lists the session directory names on disk without reading any manifest.
+//
+// It exists so the archive restore can bound each step by one session instead of holding
+// s.mu.RLock across every manifest on disk while live connections try to persist (issue #353).
+func (s *Store) ListSessionIDs() ([]string, error) {
+	s.mu.RLock()
+	root := s.sessionsDir()
+	dirs, err := os.ReadDir(root)
+	s.mu.RUnlock()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	ids := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		if d.IsDir() {
+			ids = append(ids, d.Name())
+		}
+	}
+	return ids, nil
+}
+
+// LoadSession reads one session's manifest AND its shell manifests, holding s.mu.RLock
+// only for that session. Returns nil, nil when the directory has no readable manifest.
+func (s *Store) LoadSession(sessionID string) (*api.Session, error) {
+	if err := validateID(sessionID); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sess, err := s.readManifest(s.sessionDir(sessionID))
+	if err != nil {
+		return nil, nil
+	}
+	sess.Shells = s.loadShellsLocked(sess.ID)
+	return sess, nil
+}
+
 // ReadSession reads one session's manifest from disk, whether or not any process holds
 // that session in memory.
 //

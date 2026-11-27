@@ -297,16 +297,21 @@ func (r *Reconciler) Start(ctx context.Context) error {
 		cancel()
 		return err
 	}
-	r.sweepRestored()
+	// SWEPT TWICE, ON PURPOSE (issue #353). The archive restore is a background job now,
+	// so this call covers the placeholders already in the registry and core calls
+	// SweepRestored again when the walk finishes, for the ones it loaded. The sweep is
+	// idempotent — it deletes extension sessions and finds none the second time — which is
+	// what makes "call it whenever the archive moves" safe.
+	r.SweepRestored()
 	go r.run(cctx)
 	return nil
 }
 
-// sweepRestored removes what a previous process left behind. An extension's
+// SweepRestored removes what a previous process left behind. An extension's
 // session serves the run that created it: this process builds its own from the
 // templates, so a restored placeholder — a connection nothing can be driven
 // through — is dropped rather than kept as an entry that can never be reopened.
-func (r *Reconciler) sweepRestored() {
+func (r *Reconciler) SweepRestored() {
 	if r.sessMgr == nil {
 		return
 	}

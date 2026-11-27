@@ -103,6 +103,11 @@ type Options struct {
 // Server is a running instance. It owns everything it built; Close releases it
 // in the order that lets in-flight work finish first.
 type Server struct {
+	// restoreCtx/restoreCancel bound the background archive restore (#353): Stop cancels
+	// it, so a process that is closing does not finish reading a history nobody will see.
+	restoreCtx    context.Context
+	restoreCancel context.CancelFunc
+
 	opts Options
 	cfg  *config.Config
 
@@ -182,9 +187,13 @@ func New(opts Options) (*Server, error) {
 	s.store = storage.New(cfg.DataDir)
 	s.msgMgr = message.NewManager(s.store)
 	s.sessMgr = session.NewManager(s.msgMgr, s.store, s.sshSrv)
-	if err := s.sessMgr.RestoreDead(); err != nil {
-		slog.Warn("failed to restore previous DEAD sessions", "err", err)
-	}
+	// THE ARCHIVE IS RESTORED IN THE BACKGROUND, NOT HERE (issue #353). Measured: 980ms
+	// for 60 archived sessions, all of it reading manifests — and it happened inside New,
+	// before the port ever bound. A client handshaking during it saw `initialize timed
+	// out` and reported zero tools, which reads as "the server is down" while the server
+	// was reading history. Start launches the walk instead, and RestoreStatus is the
+	// state a caller asks about.
+	s.restoreCtx, s.restoreCancel = context.WithCancel(context.Background())
 	s.sshStore = sshconfig.NewStore(cfg.DataDir)
 	s.forwardMgr = forward.NewForwardManager()
 
@@ -275,7 +284,8 @@ func (s *Server) wireUI() {
 		Sessions: s.sessMgr, MsgMgr: s.msgMgr, SSH: s.sshStore, ForwardMgr: s.forwardMgr,
 		Extensions: s.extensions, NoInternal: cfg.NoInternal, Version: s.opts.Version,
 		Daemon: s.opts.DaemonChild, StartedAt: time.Now().UTC().Format(time.RFC3339),
-		SFTP: s.mcp.SFTPPool(),
+		Restoring: func() (bool, int, int) { return s.RestoreStatus() },
+		SFTP:      s.mcp.SFTPPool(),
 	}
 	// The effective countdown is published at GET /api/daemon so the stdio bridge
 	// can ping faster than it (see daemon.InstanceInfo.IdleTimeoutMS).
@@ -333,6 +343,19 @@ func (s *Server) WaitReady(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// RestoreStatus reports the background archive restore: whether it is still running, how
+// many sessions it has loaded and how many it found (issue #353).
+//
+// IT EXISTS BECAUSE A LISTING CAN BE SHORT FOR TWO REASONS. A client that starts during a
+// restore sees fewer sessions than the archive holds; without this it cannot tell that
+// from "your sessions are gone", and the second reading is the one that gets escalated.
+func (s *Server) RestoreStatus() (restoring bool, done, total int) {
+	if s.sessMgr == nil {
+		return false, 0, 0
+	}
+	return s.sessMgr.RestoreStatus()
 }
 
 // Addr is the address the instance serves on ("host:port"), whether or not it
@@ -410,6 +433,17 @@ func (s *Server) Start() error {
 	}
 	// From here on Term can answer, so this is what "usable" means.
 	close(s.ready)
+
+	// THE ARCHIVE COMES BACK ON ITS OWN TIME (#353). It is started after `ready` because
+	// it is not what makes the instance usable: `connect` works, the port serves, and the
+	// history arrives as it arrives — with RestoreStatus and `ls` saying so. It runs before
+	// Listen binds in this process only because Listen is the caller's next line, so the
+	// port is answering while the walk is still going.
+	s.sessMgr.RestoreDeadAsync(s.restoreCtx, func() {
+		if s.extensions != nil {
+			s.extensions.SweepRestored()
+		}
+	})
 
 	if s.opts.DaemonChild {
 		timeout := daemon.DefaultIdleTimeout
@@ -557,6 +591,9 @@ func (s *Server) finish() {
 		return
 	}
 
+	if s.restoreCancel != nil {
+		s.restoreCancel()
+	}
 	if s.extensions != nil {
 		s.extensions.Stop()
 	}

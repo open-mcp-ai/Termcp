@@ -88,6 +88,14 @@ type Manager struct {
 	// duration of one operation.
 	transports *sshclient.TransportPool
 
+	// restore tracks the background archive restore (issue #353). Atomic rather than
+	// locked because these are three independent counters read by `ls` and /api/daemon,
+	// and a reader seeing them update out of phase sees "still working" rather than a
+	// broken invariant.
+	restoring   atomic.Bool
+	restoreDone atomic.Int64
+	restoreAll  atomic.Int64
+
 	listChangeMu sync.RWMutex
 	onListChange func()
 	onOutputHook func(shellID string)
@@ -610,6 +618,96 @@ func (m *Manager) PersistedSession(sessionID string) *api.Session {
 		return nil
 	}
 	return sess
+}
+
+// RestoreStatus reports the background archive restore: whether it is still running, how
+// many sessions it has loaded, and how many it found on disk.
+//
+// THE NUMBERS ARE A MEASUREMENT, NOT A GUESS: `40 of 58` is the difference between an
+// instance that is still reading history and one that lost it, which is the question a
+// caller asks when `ls` comes back short right after startup (issue #353).
+func (m *Manager) RestoreStatus() (restoring bool, done, total int) {
+	return m.restoring.Load(), int(m.restoreDone.Load()), int(m.restoreAll.Load())
+}
+
+// RestoreDeadAsync restores the archive WITHOUT BLOCKING STARTUP, and calls done when it
+// finishes (issue #353).
+//
+// THE PORT IS THE READINESS SIGNAL, AND IT MUST NOT WAIT FOR HISTORY. Measured on 60
+// archived sessions: 980ms inside core.New, entirely in reading manifests; on a large or
+// slow disk that stretches past an MCP client's initialize timeout, so the client gets 0
+// tools and believes the server never came up.
+//
+// ONE SESSION AT A TIME, releasing the store lock between them: reading all manifests in
+// one LoadSessions call would hold store.mu.RLock across the whole walk and stall every
+// new session's first persist until history finished loading.
+func (m *Manager) RestoreDeadAsync(ctx context.Context, done func()) {
+	if m.store == nil {
+		if done != nil {
+			done()
+		}
+		return
+	}
+	m.restoring.Store(true)
+	go func() {
+		loadedAny := false
+		defer func() {
+			m.restoring.Store(false)
+			if loadedAny {
+				m.notifyListChange()
+			}
+			if done != nil {
+				done()
+			}
+		}()
+		ids, err := m.store.ListSessionIDs()
+		if err != nil {
+			slog.Warn("failed to list archived sessions", "err", err)
+			return
+		}
+		m.restoreAll.Store(int64(len(ids)))
+		for _, id := range ids {
+			if ctx.Err() != nil {
+				slog.Debug("archive restore stopped: the process is closing")
+				return
+			}
+			meta, err := m.store.LoadSession(id)
+			if err != nil || meta == nil {
+				continue
+			}
+			if m.restoreOne(*meta) {
+				loadedAny = true
+				m.restoreDone.Add(1)
+			}
+		}
+	}()
+}
+
+// restoreOne loads ONE archived session into the registry. `LoadOrStore` so a live
+// session opened while the walk is in flight keeps the id.
+func (m *Manager) restoreOne(meta api.Session) bool {
+	if meta.Status == api.SessionRunning {
+		meta.Status = api.SessionExited
+	}
+	s := &Session{Session: meta, scope: newResourceScope()}
+	if m.msgMgr != nil {
+		sessionID := meta.ID
+		s.AttachCleanup(func() { m.msgMgr.ForgetSession(sessionID) })
+	}
+	onDead := m.notifyListChange
+	onChildChange := m.notifyListChange
+	s.onDead.Store(&onDead)
+	s.onChildChange.Store(&onChildChange)
+	backfillShellIndexes(meta.Shells)
+	for _, sh := range meta.Shells {
+		s.shellHistory.Store(sh.ID, sh)
+	}
+	s.nextShellIndex = maxShellIndex(meta.Shells)
+	if _, loaded := m.sessions.LoadOrStore(meta.ID, s); loaded {
+		return false
+	}
+	m.slogf("restored DEAD session", meta.ID)
+	return true
 }
 
 // RestoreDead loads persisted sessions into the registry as read-only DEAD
