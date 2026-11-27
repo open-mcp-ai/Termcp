@@ -274,8 +274,18 @@ func (s *Server) Term(ctx context.Context, cmd string, args map[string]any) enve
 	// A CALL THAT ASKED TO BE WATCHED REPORTS WHILE IT RUNS (issue #327). The wrapper is
 	// a no-op for every call that sent no `_meta.progressToken`, which is all of them
 	// unless a client is drawing a progress bar — see progress.go.
+	//
+	// ONE SHELL LINE, NO DSL (issue #319) IS A BRANCH INSIDE THE SAME EXECUTION, after the
+	// window has been parsed: `run` is handed to a shell verbatim, but `timeout`,
+	// `bytes_limit`, `encoding` and the rest of the call's budget apply to it exactly as
+	// they do to every other statement — they are properties of the REPLY, not of the DSL.
 	t := withProgressReporting(ctx, time.Duration(win.TimeoutSeconds*float64(time.Second)),
-		func(ctx context.Context) termReply { return s.executeTerm(ctx, cmd, win) })
+		func(ctx context.Context) termReply {
+			if slots, isShortcut := s.runShortcut(ctx, args, win); isShortcut {
+				return termReply{win: win, slots: slots}
+			}
+			return s.executeTerm(ctx, cmd, win)
+		})
 	// EVERY 2xx SLOT INHERITS THE CALLER'S WINDOW UNLESS IT SAYS IT ALREADY DID.
 	//
 	// `bytes_limit`/`lines_limit` are documented as an argument of the tool, not of one
