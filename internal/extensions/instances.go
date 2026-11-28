@@ -417,9 +417,23 @@ func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int
 // wherever a channel is opened, renewed or dropped, because those are the only
 // moments the answer changes.
 func (r *Reconciler) armIdle(name string, st *extState) {
-	var ctx context.Context
-	var next time.Time
+	// NOTHING HERE IS CAPTURED ACROSS A RETRY. extState.update re-runs this closure when
+	// another goroutine changes the state underneath it, so a value declared outside it
+	// (the deadline, the context) would be written a second time while the timer the first
+	// run already started is reading it — a data race the race detector reported on CI
+	// (instances.go:439 vs :441), and a real one: the timer can fire while the re-arm is
+	// in flight.
+	//
+	// attempt is the timer this CALL created and could not publish, because its CAS lost.
+	// Only this goroutine touches it (update retries in this frame), so it needs no
+	// atomic; stopping it at the top of the next run is what keeps a lost attempt from
+	// firing later against state somebody else owns.
+	var attempt *time.Timer
 	st.update(func(d *extStateData) {
+		if attempt != nil {
+			attempt.Stop()
+			attempt = nil
+		}
 		if d.timer != nil {
 			d.timer.Stop()
 			d.timer = nil
@@ -428,6 +442,7 @@ func (r *Reconciler) armIdle(name string, st *extState) {
 		if limit <= 0 || len(d.extra) == 0 {
 			return
 		}
+		var next time.Time
 		for _, ex := range d.extra {
 			if when := ex.lastUse.Add(limit); next.IsZero() || when.Before(next) {
 				next = when
@@ -436,13 +451,14 @@ func (r *Reconciler) armIdle(name string, st *extState) {
 		if next.IsZero() {
 			return
 		}
-		ctx = d.ctx
-		d.timer = time.AfterFunc(time.Until(next), func() {
+		ctx := d.ctx
+		attempt = time.AfterFunc(time.Until(next), func() {
 			if ctx != nil && ctx.Err() != nil {
 				return
 			}
 			r.idleFired(name, st.host())
 		})
+		d.timer = attempt
 	})
 }
 
