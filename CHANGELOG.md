@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- **`args` also takes an object, so a frame does not have to be written into the command
+  line.** The list form is unchanged (positional `$1`, `$2`, …); the object form is named
+  (`$NAME`), inserted by the same rule in both: a string verbatim, every other JSON value
+  as its compact JSON text — so `call s1:0 cdp:1 $FRAME` with
+  `args: {"FRAME": {"method":"Page.navigate","params":{…}}}` carries the frame as the
+  object it is, instead of as a quoted string inside `cmd`. A digit-only key is refused
+  (`$1` is positional, so the entry would name something no reference reaches), and one
+  name may appear in `args`, `vars` or `secrets` but never twice.
+
 - **An extension's endpoint now ends its client's session when the extension does.**
   `/ext/{name}/stream` is the shape a subscriber waits on, and the peer behind it is a
   process: when it exits, when its channel is closed, or when the idle sweep reaps the

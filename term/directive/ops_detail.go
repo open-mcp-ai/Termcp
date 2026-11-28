@@ -1199,6 +1199,13 @@ being a limit (8 MiB). The file must hold one JSON frame; a JSON error names the
 instead of the command line. There is no stdin form: a frame on stdin would be a pipeline
 (read … | call …), and call takes its bytes from the line or from a file.
 
+FRAME AS A NAMED VALUE (a frame a caller builds as JSON rather than as text):
+  cmd: "call internal cdp:1 $FRAME"  args: {"FRAME": {"method":"Page.navigate",
+                                                      "params":{"url":"about:blank"}}}
+An object in args is substituted as its JSON text, so the frame never passes through the
+line's quoting — the same form works for a jrpc peer (a raw MCP frame) and for cdp. A
+string value is inserted verbatim, so a frame that IS a string stays exactly as written.
+
 FLAGS:
   --send       fire-and-forget: does not wait for a reply (answers arrive on read <peer>).
   --json       returns the raw MCP response envelope instead of unpacking text.

@@ -44,10 +44,12 @@ const (
 	// send data the command text cannot carry safely writes it as a named value here
 	// and references the name in cmd.
 	argMap
-	// argStringArray is a JSON array of strings, for a parameter that is a LIST of
-	// independent values rather than one blob. It exists for `args`: each element is
-	// one positional value, referenced as $1, $2, … in cmd.
-	argStringArray
+	// argValues is either a JSON array of values (positional: $1, $2, …) or an object
+	// of value(s) by name (named: $NAME). It exists for `args`, and the two shapes are
+	// not a second mechanism: the substitution engine already has both, and `vars`
+	// spells the named half. The object exists because a caller passing a protocol frame
+	// would otherwise have to write that JSON as a quoted string INSIDE cmd.
+	argValues
 )
 
 // termArgDecl is one argument of the term tool.
@@ -305,9 +307,9 @@ var termArgDecls = []termArgDecl{
 	},
 	{
 		Name:    "args",
-		Kind:    argStringArray,
-		Desc:    "Values for $1…; cmd holds only the reference.",
-		DocNote: "Positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets`",
+		Kind:    argValues,
+		Desc:    "Values for $1…/$NAME; cmd holds only the reference.",
+		DocNote: "The values for references in `cmd`, in either of the two shapes the substitution engine has: an **array** is positional (`$1`, `$2`, …; 1-based, `$0` refused, `${10}` for ten or more) and an **object** is named (`$NAME`), which is what carries a JSON frame without writing it as a quoted string — `call s1:0 $FRAME` with `args: {\"FRAME\": {\"jsonrpc\":\"2.0\",\"method\":\"ping\"}}`. A digit-only key is refused: `$1` is positional, so `args: {\"1\": …}` would name something no reference can reach. **A string is sent verbatim; every other JSON value is sent as its compact JSON text** (`{\"a\": 1}` → `{\"a\":1}`, `3` → `3`, `true` → `true`). Nothing quotes or escapes a string — if you want one word, write the quotes inside the value. The reference must BE the payload: the value is the shell line and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. EVERY value must be referenced by cmd, and a name may appear in `args`, `vars` or `secrets` but never twice: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`. A password or a token belongs in `secrets`",
 		Def:     nil,
 		DefText: "",
 	},
@@ -492,47 +494,115 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 	if derr != nil {
 		return termArgs{}, derr
 	}
-	named, derr := mergeNamed(vars, secrets)
+	named, derr := mergeNamed(vars, secrets, "vars", "secrets")
 	if derr != nil {
 		return termArgs{}, derr
 	}
 	w.Vars = named
 	w.Secrets = secrets
-	posArgs, derr := readArgsArg(args)
+	posArgs, argNames, derr := readArgsArg(args)
 	if derr != nil {
 		return termArgs{}, derr
 	}
 	w.Args = posArgs
+	if len(argNames) > 0 {
+		// THE OBJECT FORM JOINS THE SAME TABLE as vars, so "one reference, one value"
+		// stays one rule: a name defined in two places is refused here rather than
+		// silently resolved by whichever table was read last.
+		merged, derr := mergeNamed(argNames, w.Vars, "args", "vars/secrets")
+		if derr != nil {
+			return termArgs{}, derr
+		}
+		w.Vars = merged
+	}
 	return w, nil
 }
 
 // readArgsArg reads the positional values.
 //
-// A string is refused rather than treated as a one-element list: `args: "pwd"` and
-// `args: ["pwd"]` would then be the same request spelled two ways, and a caller that
-// wrote a shell-looking string would never learn that its quoting reached the server
-// as data. Every element must be a string for the same reason vars values must be:
-// guessing that a JSON number meant its decimal spelling would put a value in the
-// substitution that the caller never sent.
-func readArgsArg(args map[string]any) ([]string, *directive.Error) {
+// A BARE STRING IS STILL REFUSED: `args: "pwd"` and `args: ["pwd"]` would then be the
+// same request spelled two ways, and a caller that wrote a shell-looking string would
+// never learn that its quoting reached the server as data.
+//
+// TWO SHAPES, ONE MECHANISM. An array is positional ($1, $2, …) and an object is named
+// ($NAME) — the same two halves the substitution engine already has, and the reason the
+// object exists at all: `call s1:0 $FRAME` with `args: {"FRAME": {...}}` carries a JSON
+// frame as the object it is, where the array form made the caller write that frame as a
+// quoted string inside cmd and get the quoting wrong. A digit-only key is refused
+// because `$1` is positional: the entry would name something no reference can reach.
+//
+// A STRING IS VERBATIM, EVERYTHING ELSE IS JSON. That one line is the whole rule, and
+// it is what keeps this from guessing: a string is the bytes the caller sent (unchanged
+// from before, quotes included), and `{"a": 1}`, `3`, `true` are their compact JSON
+// spellings — the value the caller wrote, in the form the reference needs.
+func readArgsArg(args map[string]any) ([]string, map[string]string, *directive.Error) {
 	raw, present := args["args"]
 	if !present || raw == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
-	list, ok := raw.([]any)
-	if !ok {
-		return nil, &directive.Error{Msg: "args must be an array of strings, got " + typeNameOf(raw) +
-			"; write it as [\"first\", \"second\"]"}
-	}
-	out := make([]string, len(list))
-	for i, v := range list {
-		s, isString := v.(string)
-		if !isString {
-			return nil, &directive.Error{Msg: "args[" + strconv.Itoa(i) + "] must be a string, got " + typeNameOf(v)}
+	switch v := raw.(type) {
+	case []any:
+		out := make([]string, len(v))
+		for i, e := range v {
+			s, derr := valueText(e)
+			if derr != nil {
+				return nil, nil, &directive.Error{Msg: "args[" + strconv.Itoa(i) + "]: " + derr.Msg}
+			}
+			out[i] = s
 		}
-		out[i] = s
+		return out, nil, nil
+	case map[string]any:
+		out := make(map[string]string, len(v))
+		for k, e := range v {
+			if isPositionalName(k) {
+				return nil, nil, &directive.Error{Msg: "args key " + strconv.Quote(k) + " looks positional: " +
+					"`$" + k + "` is the " + k + "th value of an ar" + "ray, so this entry would name something no " +
+					"reference can reach. Put positional values in a list (`args: [\"first\", \"second\"]`), or " +
+					"give this one a name (`args: {\"row\": …}`)"}
+			}
+			s, derr := valueText(e)
+			if derr != nil {
+				return nil, nil, &directive.Error{Msg: "args[" + strconv.Quote(k) + "]: " + derr.Msg}
+			}
+			out[k] = s
+		}
+		return nil, out, nil
 	}
-	return out, nil
+	return nil, nil, &directive.Error{Msg: "args must be a list of values (positional: $1, $2, …) or an object of " +
+		"values by name (named: $NAME), got " + typeNameOf(raw) + "; write it as [\"first\", \"second\"] or " +
+		"{\"FRAME\": {…}}"}
+}
+
+// valueText renders one argument value as the text a reference expands to.
+//
+// A string is the text itself. Every other JSON value goes through json.Marshal, which
+// is both the compact spelling and the one the caller wrote: nothing here reorders a
+// map, adds whitespace or stringifies a number by hand.
+func valueText(v any) (string, *directive.Error) {
+	if s, ok := v.(string); ok {
+		return s, nil
+	}
+	// ORDER IS NOT THE CALLER'S, and that is fine: encoding/json sorts object keys, so
+	// the text is deterministic even though the object arrived through a JSON parse that
+	// had no order to keep — and JSON object order is not significant to the peer either.
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return "", &directive.Error{Msg: "value cannot be written as JSON: " + err.Error()}
+	}
+	return string(raw), nil
+}
+
+// isPositionalName reports whether a name is also a positional reference number.
+func isPositionalName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, r := range name {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // readNamedArg reads one named-value dictionary: vars or secrets.
@@ -577,24 +647,27 @@ func readNamedArg(args map[string]any, name string) (map[string]string, *directi
 // defined in both is refused rather than resolved by precedence: the caller wrote two
 // values for one reference, and any rule picked here would be a silent choice between
 // them.
-func mergeNamed(vars, secrets map[string]string) (map[string]string, *directive.Error) {
-	for name := range secrets {
-		if _, both := vars[name]; both {
-			return nil, &directive.Error{Msg: "the name " + name + " is defined in both vars and secrets; " +
-				"a reference has one value, so put it in the table whose record you want"}
+func mergeNamed(first, second map[string]string, firstName, secondName string) (map[string]string, *directive.Error) {
+	// THE NAMES ARE ARGUMENTS so the refusal can say which two tables collided: the same
+	// rule covers vars+secrets and the named form of args, and a message that named the
+	// wrong pair would send the caller to edit the table it did not duplicate.
+	for name := range second {
+		if _, both := first[name]; both {
+			return nil, &directive.Error{Msg: "the name " + name + " is defined in both " + firstName + " and " +
+				secondName + "; a reference has one value, so put it in the table whose record you want"}
 		}
 	}
-	if len(secrets) == 0 {
-		return vars, nil
+	if len(second) == 0 {
+		return first, nil
 	}
-	if len(vars) == 0 {
-		return secrets, nil
+	if len(first) == 0 {
+		return second, nil
 	}
-	out := make(map[string]string, len(vars)+len(secrets))
-	for k, v := range vars {
+	out := make(map[string]string, len(first)+len(second))
+	for k, v := range first {
 		out[k] = v
 	}
-	for k, v := range secrets {
+	for k, v := range second {
 		out[k] = v
 	}
 	return out, nil

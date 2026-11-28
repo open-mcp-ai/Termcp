@@ -89,14 +89,18 @@ func termArgToolOptions() []mcp.ToolOption {
 				mcp.Description(d.Desc),
 				mcp.AdditionalProperties(map[string]any{"type": "string"}),
 			))
-		case argStringArray:
-			// A list of strings. `items` is what lets a client refuse `[1, 2]` before
-			// the call; readArgsArg enforces the same rule for the REST entrance.
+		case argValues:
+			// EITHER SHAPE, so the schema says both: a client validating `type: array`
+			// would refuse the object form the reader accepts, and one validating
+			// `type: object` would refuse the list. Values are untyped on purpose — the
+			// substitution is text, and readArgsArg turns a value into it (a string
+			// verbatim, anything else as compact JSON).
 			// minItems is NOT pinned to 1: an empty list is the same request as an
 			// omitted one, and refusing it would make two spellings of one call differ.
 			out = append(out, mcp.WithArray(d.Name,
 				mcp.Description(d.Desc),
-				mcp.Items(map[string]any{"type": "string"}),
+				mcp.Items(map[string]any{}),
+				mcp.PropertyOption(func(p map[string]any) { p["type"] = []string{"array", "object"} }),
 			))
 		}
 	}

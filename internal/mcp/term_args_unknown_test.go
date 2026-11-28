@@ -78,7 +78,10 @@ func sampleValueFor(kind argKind) any {
 	switch kind {
 	case argString:
 		return "ls"
-	case argStringArray:
+	case argValues:
+		// EITHER SHAPE IS LEGAL, so the sample is the ordinary one: the object form has
+		// its own test (term_args_object_test.go), and a sample that exercised both here
+		// would leave the array spelling unchecked.
 		return []any{"echo hi"}
 	case argMap:
 		return map[string]any{"V": "echo hi"}
