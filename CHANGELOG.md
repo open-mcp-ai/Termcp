@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+
+## v0.2.10-rc.2 — 2026-11-28
+
 - **A key must have a name.** An empty label used to be legal and the list rendered
   it as the key's short hash — a row whose only distinguishing feature was a
   hexadecimal prefix, in a list whose whole job is telling keys apart. Create and
@@ -276,7 +279,6 @@
   (`rm --dead`, preview with `--dry-run`). Running sessions are refused per entry and
   never swept: `--dead` names its targets by state, so `--force` does not apply to it.
 
-### Added
 - An extension's own notifications now reach an attached client: `/ext/{name}/stream`
   keeps a reader on the channel per extension, so a frame the peer sends on its own
   (`notifications/<own name>/<event>` — a spec-legal custom method) is delivered to
