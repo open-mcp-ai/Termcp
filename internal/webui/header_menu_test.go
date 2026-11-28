@@ -91,7 +91,10 @@ const document = {
 const ctx = {
   console, document, JSON, Object, Array, String, Number,
   navigator: { languages: ['en'] },
-  localStorage: { getItem: () => null, setItem() {} }
+  localStorage: { getItem: () => null, setItem() {} },
+  /* i18n.js wants one load listener to re-apply the catalog after the modules
+     have built their markup (a real browser always has this). */
+  window: { addEventListener() {} }
 };
 vm.createContext(ctx);
 vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), ctx);

@@ -11,6 +11,30 @@
   closed, which used to spin the reader and never conclude the channel had ended), so
   the client sees the stream end and its next request answered `404`: initialize again,
   which restarts the extension and re-subscribes.
+- **The host menu speaks the page's language.** Four batch-menu entries (lock,
+  unlock, activate, deactivate) are built by a module rather than authored in
+  `index.html`, so they were inserted after the translation engine's first pass over
+  the document and kept the English fallback written beside their keys — on a Chinese
+  page. They were translated only when a theme's resource fetch happened to re-apply
+  the catalog afterwards, which is a race: a cached theme resolved before the markup
+  existed and left them English, a cold one resolved after and did not. The catalog
+  is now applied once more when the document finishes parsing, so a string a module
+  builds no longer depends on which fetch won.
+- **Ticking a host now points at the batch key.** In select mode the key that acts on
+  the selection sits at the right end of the toolbar while the eye is on the card
+  just ticked, so nothing said where to go next. Every tick flashes that plate once
+  — accent border and glyphs, a ring expanding out of it — and the flash is disabled
+  under `prefers-reduced-motion`, where the lit card and the count already carry the
+  same news.
+- **One verb for taking a host out of here.** *Export Config* and *Share selected
+  host* were two menu items for one intention: the same profile document leaves the
+  machine either way, and only "who may open it" differs. The batch menu now carries
+  one *Export or share*, and the dialog asks that question once — a plain TOML file,
+  that file sealed with a passphrase, or one profile sealed to the other person's
+  public key as text to paste into any chat. The passphrase answer was already
+  implemented on the server (`X-Termcp-Password`) with no UI at all, and the import
+  dialog could not supply one, so a sealed `.enc` file downloaded from the page could
+  not be opened again from the page; both ends speak it now.
 - **A key must have a name.** An empty label used to be legal and the list rendered
   it as the key's short hash — a row whose only distinguishing feature was a
   hexadecimal prefix, in a list whose whole job is telling keys apart. Create and

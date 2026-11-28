@@ -254,3 +254,15 @@ function initI18n() {
 }
 initI18n();
 initLangMenu();
+/* The modules loaded after this one build their own markup — the batch menu's
+   encryption keys, the keychain's and the share dialog's verbs — so the pass above
+   covers only what was parsed from index.html. Without a second pass those strings
+   keep the English fallback written beside their data-i18n key, and they are only
+   translated when something happens to re-apply the catalog afterwards.
+
+   That something is a theme's resource fetch, which calls setI18nThemeCatalog and
+   so refreshI18nText: an accident, and a race. A cached theme resolves before the
+   later modules insert their markup (the menu stays English), a cold one resolves
+   after (it does not) — the same build, two answers, which is how this was found.
+   Translating once the document has finished parsing makes the order irrelevant. */
+window.addEventListener('load', function () { applyI18n(document); });

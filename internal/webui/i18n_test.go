@@ -449,3 +449,46 @@ func TestLoadTimeMarkupAppliesItsOwnTranslations(t *testing.T) {
 		}
 	}
 }
+
+/* A module that builds markup while it loads does so AFTER i18n.js's first pass over
+ * the document, so the data-i18n attributes in that markup would keep the English
+ * fallback written beside them — forever, if nothing re-applied the catalog later.
+ *
+ * Something did: a theme's resource fetch calls setI18nThemeCatalog, which re-runs
+ * the catalog over the document. But that is a network race, and it decides the
+ * answer: resolves after the modules insert their markup and the page is translated,
+ * resolves before (a cached theme fits in that window) and it is not. The same build
+ * therefore showed the batch menu as "ENCRYPT SELECTED" under a Chinese page on one
+ * machine and correctly on the next — reported from a screenshot, and reproduced by
+ * removing that accidental pass.
+ *
+ * The last translation has to be a fixed step: one pass once the document has
+ * finished parsing, whatever the theme did in the meantime.
+ */
+func TestMarkupBuiltByAModuleIsTranslated(t *testing.T) {
+	engine := readAssetLF(t, "static/js/i18n.js")
+	if !strings.Contains(engine, "window.addEventListener('load', function () { applyI18n(document); })") {
+		t.Error("nothing re-applies the catalog after the modules have built their markup: " +
+			"their strings keep the English fallback unless a theme's fetch happens to re-render, " +
+			"which is a race and was reported as an untranslated batch menu")
+	}
+
+	// The menu entries that showed it are still built by a module — index.html cannot
+	// translate what it does not author — so this pass has live work to do.
+	panel := readAssetLF(t, "static/js/config-storage.js")
+	for _, id := range []string{
+		`id="nethub-menu-encrypt"`, `id="nethub-menu-restore"`,
+		`id="nethub-menu-activate"`, `id="nethub-menu-deactivate"`,
+	} {
+		if !strings.Contains(panel, id) {
+			t.Fatalf("%s is no longer built by config-storage.js; this test's premise moved", id)
+		}
+	}
+	// And it must not have gone back to translating only its own panel: that pass
+	// runs BEFORE these two inserts, which is how they were missed.
+	if i := strings.Index(panel, "applyI18n(_configStorageRoot)"); i >= 0 {
+		if !strings.Contains(panel[i:], `id="nethub-menu-encrypt"`) {
+			t.Log("note: the panel's own pass still runs before the menu inserts — the load-time pass is what covers them")
+		}
+	}
+}

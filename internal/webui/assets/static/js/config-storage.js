@@ -1037,11 +1037,6 @@ function syncConfigStorageActions() {
   activateKey.disabled = !selectedInactive;
   deactivateKey.disabled = !selectedActive;
   encryptKey.title = keyReady ? t('storage.encryptTitle') : t('storage.initializeFirst');
-  /* Sending is about exactly one host, so this item follows its own rule rather
-     than the batch bar's "one or more": with two ticked there is no single host to
-     send, and the dialog could only say so after the click. */
-  var shareKey = document.getElementById('nethub-menu-share');
-  if (shareKey) shareKey.disabled = selected.length !== 1;
 }
 
 /* Neither action is a button of its own: they are the two answers to the same

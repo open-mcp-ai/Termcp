@@ -502,12 +502,13 @@ func TestReceiveSharedHostHasAnEntrance(t *testing.T) {
 	}
 }
 
-/* Sending is about exactly ONE host, so the menu item follows its own rule, not
- * the batch bar's "one or more": with two ticked there is no single host to send.
- * It has to be in the batch bar's disable list as well, or an empty selection
- * leaves it looking actionable and the dialog can only answer with an error.
+/* Exporting a host and sharing it were two menu items for one intention: the same
+ * document leaves the machine either way, and only "who may open it" differs. The
+ * merge is pinned here at the places it could silently come apart — a second exit
+ * creeping back into the batch bar, and a protection the dialog offers that never
+ * reaches the route implementing it.
  */
-func TestShareMenuItemFollowsTheSelection(t *testing.T) {
+func TestExportAndShareAreOneVerb(t *testing.T) {
 	dialogs := readAssetLF(t, "static/js/dialogs.js")
 	start := strings.Index(dialogs, "var _nodeBatch = createBatchBar(")
 	if start < 0 {
@@ -517,21 +518,57 @@ func TestShareMenuItemFollowsTheSelection(t *testing.T) {
 	if end := strings.Index(block, "cardSelector:"); end >= 0 {
 		block = block[:end]
 	}
-	if !strings.Contains(block, `'nethub-menu-share'`) {
-		t.Error("nethub-menu-share is not in the batch bar's actionIds; it stays clickable with nothing selected")
+	if strings.Contains(block, `'nethub-menu-share'`) {
+		t.Error("the batch bar still carries a second exit for the same intention; " +
+			"sharing is a protection inside the export dialog")
+	}
+	if !strings.Contains(dialogs, "shareOpen('export')") {
+		t.Error("the export verb does not open the export/share dialog")
 	}
 
-	panel := readAssetLF(t, "static/js/config-storage.js")
-	fnStart := strings.Index(panel, "function syncConfigStorageActions(")
-	if fnStart < 0 {
-		t.Fatal("config-storage.js no longer defines syncConfigStorageActions")
+	// The three protections the dialog offers, each with the sentence that says what
+	// it costs: a choice nobody can evaluate is a coin toss with a keyboard.
+	share := readAssetLF(t, "static/js/share.js")
+	for _, want := range []string{
+		`value="plain"`, `value="password"`, `value="key"`,
+		"share.hintPlain", "share.hintPassword", "share.hintKey",
+	} {
+		if !strings.Contains(share, want) {
+			t.Errorf("share.js is missing %q; the merge lost one of the three protections", want)
+		}
 	}
-	fn := panel[fnStart:]
-	if end := strings.Index(fn, "\n}\n"); end >= 0 {
-		fn = fn[:end]
+	/* Encryption succeeds whatever was typed, so the second field is the only place a
+	   mistyped passphrase is catchable — on this side. On the other side the file is
+	   simply unopenable and the only fix is to go back and export again. */
+	if !strings.Contains(share, "id=\"share-pass2\"") || !strings.Contains(share, "share.passMismatch") {
+		t.Error("the passphrase is not typed twice and compared; a typo produces a file nobody can open")
 	}
-	if !strings.Contains(fn, "shareKey.disabled = selected.length !== 1") {
-		t.Error("the share item is not disabled unless exactly one host is ticked")
+	/* A share seals ONE profile (the name rides the envelope), so the dialog must not
+	   promise more than the route can do. */
+	if !strings.Contains(share, "share.selectOne") {
+		t.Error("nothing refuses a multi-host share; hostshare sells one profile per blob")
+	}
+
+	// And the two file-shaped answers reach the same route, one with the password
+	// header and one without. Without this the dialog would offer encryption that
+	// never happens — which is exactly the gap the import dialog used to have.
+	conn := readAssetLF(t, "static/js/conn-form.js")
+	if !strings.Contains(conn, "'X-Termcp-Password': password") {
+		t.Error("the sealed export never sends the password header")
+	}
+	if !strings.Contains(readAssetLF(t, "static/js/util.js"), "fetch(path, headers ? { headers: headers } : undefined)") {
+		t.Error("downloadTOML drops the headers, so the password cannot reach the route")
+	}
+
+	// Receiving a sealed file is the other half of that: a download the browser cannot
+	// import back is a file the UI produced and cannot consume. The field lives in
+	// conn-form.js, not index.html — that page has a markup budget and this dialog's
+	// logic already owns it.
+	if !strings.Contains(conn, `id="conn-import-pass"`) {
+		t.Error("the import dialog has no passphrase field; a sealed .enc file cannot be opened from the page")
+	}
+	if !strings.Contains(conn, "X-Termcp-Password") {
+		t.Error("the import dialog does not send the passphrase it collected")
 	}
 }
 

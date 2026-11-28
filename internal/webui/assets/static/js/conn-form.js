@@ -779,6 +779,17 @@ document.getElementById('conn-duplicate').onclick = function () {
   try { nameEl.focus(); } catch (e) {}
 };
 
+/* The optional passphrase for a sealed import, built here rather than in index.html
+   because that page has a markup budget and this field belongs to this dialog's own
+   logic: empty means plain TOML, filled means the backend opens the envelope before
+   the TOML parser sees it. One dialog for both kinds, so nobody has to classify
+   their own file before importing it. */
+document.getElementById('conn-import-file').parentNode.insertAdjacentHTML('afterend',
+  '<div class="conn-field"><label for="conn-import-pass" data-i18n="conn.batch.passLabel">Passphrase</label>' +
+  '<input type="password" id="conn-import-pass" autocomplete="off" spellcheck="false">' +
+  '<div class="conn-check-hint" data-i18n="conn.batch.passHint">Only for a sealed file. Leave it empty for plain TOML.</div></div>');
+if (typeof applyI18n === 'function') applyI18n(document.getElementById('conn-import-pass').parentNode);
+
 document.getElementById('conn-import-open').onclick = function (e) {
   e.stopPropagation();
   /* The dialog is a singleton and an import can take a while, so a second open
@@ -786,6 +797,7 @@ document.getElementById('conn-import-open').onclick = function (e) {
   var btn = document.getElementById('conn-import-run');
   if (btn) btn.disabled = false;
   document.getElementById('conn-import-file').value = '';
+  document.getElementById('conn-import-pass').value = '';
   document.getElementById('conn-import-temporary').checked = false;
   document.getElementById('conn-import-err').style.display = 'none';
   document.getElementById('conn-import-err').textContent = '';
@@ -803,9 +815,15 @@ document.getElementById('conn-import-run').onclick = function () {
   var btn = this;
   btn.disabled = true;
   var temporary = document.getElementById('conn-import-temporary').checked;
+  /* Optional, and it is the only way to open a sealed .enc file. A plain TOML
+     document ignores it, so one dialog covers both kinds without asking the
+     person to first classify their own file. */
+  var password = String(document.getElementById('conn-import-pass').value || '');
   // The file is opaque to the UI; the backend parses and validates its TOML.
+  var headers = { 'Content-Type': 'application/toml' };
+  if (password) headers['X-Termcp-Password'] = password;
   fetch(apiPath('/api/connections/batch?temporary=') + temporary, {
-    method: 'POST', headers: { 'Content-Type': 'application/toml' }, body: file
+    method: 'POST', headers: headers, body: file
   }).then(function (r) {
     if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
     return r.json();
@@ -831,11 +849,18 @@ document.getElementById('conn-import-run').onclick = function () {
 };
 /* The connections export, over the shared TOML download: the backend composes
    the document either way (names filter or all), so the browser stays a pipe
-   for opaque bytes. */
-function downloadConnectionsToml(names) {
+   for opaque bytes.
+
+   One route serves both protections. Without a password it is the plain TOML
+   file this export has always produced; with one, the same bytes come back
+   sealed (TERMCP-ENC 1) and named .enc, because a file that needs termcp should
+   not look like a TOML editor's. The password rides a header for the reason the
+   route documents: a URL is logged. */
+function downloadConnectionsToml(names, password) {
   var path = apiPath('/api/connections/batch');
   if (names && names.length) path += '?names=' + names.map(encodeURIComponent).join(',');
-  return downloadTOML(path, 'termcp-connections.toml');
+  if (!password) return downloadTOML(path, 'termcp-connections.toml');
+  return downloadTOML(path, 'termcp-connections.enc', { 'X-Termcp-Password': password });
 }
 
 /* ---- NetHub selection actions ---------------------------------------------
@@ -879,25 +904,14 @@ function openSelectedNodes(names) {
 }
 
 /* The built-in profile rides along in any selection (open works for it), but
-   export and delete have nothing to do with it — the server refuses both, so
-   the buttons refuse first and say why instead of shipping a request that can
-   only partly succeed. */
+   export, share and delete have nothing to do with it — the server refuses all
+   three, so the buttons refuse first and say why instead of shipping a request
+   that can only partly succeed. */
 function selectionHasInternal(names) {
   for (var i = 0; i < names.length; i++) {
     if (String(names[i]).toLowerCase() === 'internal') return true;
   }
   return false;
-}
-
-function exportSelectedNodes(names) {
-  if (!names || !names.length) return;
-  if (selectionHasInternal(names)) {
-    showCopyToast(t('nethub.batch.exportInternal'));
-    return;
-  }
-  downloadConnectionsToml(names).catch(function (e) {
-    showCopyToast(t('conn.batch.exportFailed', { msg: String(e.message || e) }));
-  });
 }
 
 // One request for every id (comma-separated path, like the session routes):

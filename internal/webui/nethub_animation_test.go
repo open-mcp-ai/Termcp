@@ -337,3 +337,54 @@ func TestEveryPlateInTheTerminalHeaderCarriesTheCutCorner(t *testing.T) {
 		t.Error("the window header's tick has no knob rule at its own size: it would fall back to the shared defaults (a 14px cut) and the shape would be wrong at 24px")
 	}
 }
+
+// Ticking one host says nothing about where the batch verbs are: in select mode the
+// card lights up and the switch's count changes, while the key that ACTS on the
+// selection sits at the row's far end, away from the eye that is on the card. So
+// each tick flashes the plate once.
+//
+// Two ways that fails silently, and both are pinned here: an animation class that is
+// re-added while it is still present (the first tick moves, every later one is
+// ignored — which reads as "the flash is broken"), and a flash that ignores
+// `prefers-reduced-motion`. The second is safe to disable, unlike the toolbar's
+// expand/collapse: that slide is the only feedback a press landed, while a tick
+// already lights the card and bumps the count, so nothing is lost here — and a
+// per-tick full-plate flash is the one shape a motion-sensitive reader asked to be
+// spared.
+func TestEachTickFlashesTheBatchVerb(t *testing.T) {
+	bar := readAssetLF(t, "static/js/batch-bar.js")
+	if !strings.Contains(bar, "if (adding && state.mode) flashVerb();") {
+		t.Error("nothing flashes the batch plate on a tick: the verb stays undiscovered")
+	}
+	if !strings.Contains(bar, "void plate.offsetWidth;") {
+		t.Error("the flash class is re-added without a reflow between, so only the first tick animates")
+	}
+	if !strings.Contains(bar, "plate.classList.remove('is-ticking')") {
+		t.Error("the flash class is never removed, so a second tick cannot restart it")
+	}
+
+	src, err := os.ReadFile(filepath.Join("assets", "static", "css", "workspace.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := string(src)
+	rules := parseNethubRules(css)
+	if animated := nethubRule(t, rules, ".nethub-open-plate.is-ticking"); !strings.Contains(animated, "animation:") {
+		t.Error("the plate carries the class but no animation, so a tick moves nothing")
+	}
+	if !strings.Contains(css, "@keyframes nethubPlateTick") {
+		t.Error("nethubPlateTick is referenced but not defined")
+	}
+	/* The opt-out lives in the shared motion policy (theme.css), beside the backdrop
+	   and the live dot, not in this sheet: one place decides what reduced motion
+	   keeps, and that block is already the answer for every other animation. */
+	motion := readAssetLF(t, "static/css/theme.css")
+	reduced := between(t, motion, "@media (prefers-reduced-motion: reduce) {", "\n}")
+	if !strings.Contains(reduced, ".nethub-open-plate.is-ticking") || !strings.Contains(reduced, "animation: none") {
+		t.Errorf("the flash is not switched off under prefers-reduced-motion; got %q", reduced)
+	}
+	if strings.Contains(css, "@media (prefers-reduced-motion") {
+		t.Error("workspace.css grew a second reduced-motion block: the policy belongs in theme.css, " +
+			"and a second block is what makes readers and tests disagree about which one applies")
+	}
+}

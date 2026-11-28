@@ -1895,6 +1895,21 @@
 .batch-open-main { flex: 1 1 auto; min-width: 0; padding: 0 10px; gap: 8px; }
 .batch-open-caret { flex: 0 0 22px; border-left: 1px solid var(--border-subtle); }
 .nethub-open-plate button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+/* One tick, one flash of the verb. In select mode the plate is where the batch
+   action lives, but it sits at the row's right end while the eye is on the card
+   just ticked, so each tick answers once: the border and glyphs take the accent
+   (the same colour the pressed switch wears) and a ring expands out of the plate
+   and fades. batch-bar.js re-adds the class per tick, which is what restarts it. */
+.nethub-open-plate.is-ticking { animation: nethubPlateTick .4s ease-out; }
+.nethub-open-plate.is-ticking button { animation: nethubPlateGlyphTick .4s ease-out; }
+@keyframes nethubPlateTick {
+  from { border-color: var(--accent); box-shadow: 0 0 0 0 var(--accent); }
+  to { border-color: var(--border-strong); box-shadow: 0 0 0 7px transparent; }
+}
+@keyframes nethubPlateGlyphTick {
+  from { color: var(--accent); }
+  to { color: var(--text-secondary); }
+}
 /* There is deliberately no nethubKeyIn keyframe here. The companions fade in as
    the switch shuts and fade out as it opens again, but that motion is a
    `transition` on the rules above — the keyframe it replaced was attached to the

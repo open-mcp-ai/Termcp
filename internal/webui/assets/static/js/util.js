@@ -513,11 +513,15 @@ function showUiNotify(n) {
 }
 
 /** Display: strip leading session- from name, else use id */
-/** Download an opaque TOML document from an export route. The backend composes
- *  the document (a selection, or everything), so the browser stays a pipe for
- *  bytes: fetch, blob, hand it to the download machinery, release the URL. */
-function downloadTOML(path, filename) {
-  return fetch(path).then(function (r) {
+/** Download an opaque document from an export route. The backend composes the
+ *  document (a selection, or everything), so the browser stays a pipe for bytes:
+ *  fetch, blob, hand it to the download machinery, release the URL.
+ *
+ *  `headers` is how a sealing decision reaches the server: the export route's
+ *  password travels in a header (never the URL, which ends up in browser history
+ *  and proxy logs), so the same GET produces plain TOML or a sealed envelope. */
+function downloadTOML(path, filename, headers) {
+  return fetch(path, headers ? { headers: headers } : undefined).then(function (r) {
     if (!r.ok) return r.text().then(function (message) { throw new Error(message || String(r.status)); });
     return r.blob();
   }).then(function (blob) {

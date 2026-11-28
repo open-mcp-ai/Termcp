@@ -382,7 +382,7 @@ var _nodeBatch = createBatchBar({
   menuId: 'nethub-open-menu',
   exportId: 'nethub-menu-export',
   deleteId: 'nethub-menu-delete',
-  actionIds: ['nethub-menu-export', 'nethub-menu-encrypt', 'nethub-menu-restore', 'nethub-menu-share', 'nethub-menu-delete'],
+  actionIds: ['nethub-menu-export', 'nethub-menu-encrypt', 'nethub-menu-restore', 'nethub-menu-delete'],
   gridId: 'conn-grid',
   cardSelector: '.conn-tile[data-conn-name]',
   nameAttr: 'data-conn-name',
@@ -404,7 +404,9 @@ var _nodeBatch = createBatchBar({
     return addr ? (tipConnect + ' — ' + addr) : tipConnect;
   },
   onOpen: function (names) { openSelectedNodes(names); },
-  onExport: function (names) { exportSelectedNodes(names); },
+  /* Both answers to "move this host out of here" live behind one verb now: the
+     dialog asks who may open it, and that decides between a file and a share text. */
+  onExport: function () { if (typeof shareOpen === 'function') shareOpen('export'); },
   onDelete: function (names) { deleteSelectedNodes(names); },
   /* The encryption keys need the selection's storage modes, which the component
      cannot know: it counts ticks, not what those hosts hold. Its own paint runs

@@ -64,6 +64,14 @@
   /* A breathing backdrop is decoration: at rest it simply stays at its brighter
      value, so nothing about the page's contrast changes. */
   .page-backdrop { animation: none; opacity: 1; }
+  /* The batch plate's per-tick flash (workspace.css) is the one rule here that is a
+     CUE rather than decoration, and it is still switched off: a full-box flash,
+     restarted on every tick, is the shape a motion-sensitive reader asked to be
+     spared. Nothing is lost — the card just ticked is lit and the switch counts it,
+     so the flash only says "over here", which the two keys keep saying by being
+     where they always are. */
+  .nethub-open-plate.is-ticking,
+  .nethub-open-plate.is-ticking button { animation: none; }
   /* Every rule above is decoration, and at rest it stays at its readable value.
      `.session-tab.is-fresh` is deliberately NOT here. Holding its lit state instead
      of blinking was the bug: on a bright accent theme (matrix) that made the tab a
