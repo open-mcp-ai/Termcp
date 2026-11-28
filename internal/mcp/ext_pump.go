@@ -66,6 +66,10 @@ const (
 type extPump struct {
 	s     *Server
 	shell string
+	// name is the extension this channel belongs to, captured at start because the mapping
+	// is exactly what stops existing when the channel ends — and ending it is when the name
+	// is needed.
+	name string
 	// sessID is the connection the shell lives on, kept for Touch: the reconciler reaps
 	// an idle extension, and a client that is attached and receiving pushes is not idle.
 	sessID string
@@ -102,6 +106,7 @@ func (s *Server) extPumpFor(shellID string) (*extPump, error) {
 	p := &extPump{
 		s:      s,
 		shell:  shellID,
+		name:   s.extNameOfShell(shellID),
 		sessID: child.ParentSessionID(),
 		cancel: cancel,
 		done:   make(chan struct{}),
@@ -134,6 +139,16 @@ func (p *extPump) stop(reason string) {
 func (p *extPump) run(ctx context.Context) {
 	defer close(p.done)
 	defer p.s.extPumps.Delete(p.shell)
+	// WHATEVER ENDS THIS CHANNEL ALSO ENDS THE SESSIONS ATTACHED TO IT. A subscriber's GET
+	// stream is not a socket to the peer: it is a stream from this instance, so nothing
+	// about the peer dying reaches it. Closing those sessions is the only "the thing behind
+	// this endpoint is gone" a client can observe, and its next request answering 404 is
+	// what makes it initialize again.
+	defer func() {
+		if n := p.s.closeExtSessions(p.name); n > 0 {
+			slog.Info("extension endpoint ended", "name", p.name, "sessions", n)
+		}
+	}()
 	child := p.s.sessMgr.GetChildShell(p.shell)
 	if child == nil {
 		return
@@ -168,6 +183,15 @@ func (p *extPump) run(ctx context.Context) {
 			return
 		}
 		if len(raw) == 0 {
+			// A DEAD PROCESS IS NOT A QUIET ONE, and the read does not say which: once the
+			// peer's pipe is closed a read returns nothing with no error, immediately and
+			// for ever — which spun this loop and left the pump convinced the channel was
+			// alive, so nothing downstream was ever told it had ended. Alive() is the
+			// measurement of the process rather than the published status (internal/session).
+			if !child.Alive() {
+				p.failAll("the extension's channel ended")
+				return
+			}
 			continue
 		}
 		// A CLIENT ATTACHED TO THIS ENDPOINT IS USING THE EXTENSION (issue #183): without
@@ -226,6 +250,25 @@ func (p *extPump) route(ctx context.Context, frame []byte) {
 // tr returns the transport serving this channel, for fanout.
 func (p *extPump) tr() *mcpStreamable {
 	return p.s.extTransportOfChannel(p.shell)
+}
+
+// closeExtSessions ends every session of an extension's transport, and forgets the channel
+// it was serving.
+//
+// BY NAME, NOT BY CHANNEL: extTransportOfChannel asks GetChildShell first, which is nil in
+// exactly the case that needs this. It LOADS rather than calls extTransport, because
+// creating a transport in order to end its (empty) sessions would leave one behind for
+// every extension that ever died.
+func (s *Server) closeExtSessions(name string) int {
+	if name == "" {
+		return 0
+	}
+	s.extShells.Delete(name)
+	v, ok := s.extTransports.Load(name)
+	if !ok {
+		return 0
+	}
+	return v.(*mcpStreamable).EndSessions(context.Background())
 }
 
 // failAll wakes every waiter with a message instead of leaving them to time out.

@@ -1,6 +1,16 @@
 # Changelog
 
 ## Unreleased
+- **An extension's endpoint now ends its client's session when the extension does.**
+  `/ext/{name}/stream` is the shape a subscriber waits on, and the peer behind it is a
+  process: when it exits, when its channel is closed, or when the idle sweep reaps the
+  extension, the publisher is gone and every attached client kept a `GET` stream that
+  could never carry another frame. Nothing about that death reached the stream — the
+  keep-alive kept it warm, so a quiet subscription and a dead one were the same bytes.
+  A closed session now wakes its stream (and the pump recognises a peer whose pipe
+  closed, which used to spin the reader and never conclude the channel had ended), so
+  the client sees the stream end and its next request answered `404`: initialize again,
+  which restarts the extension and re-subscribes.
 - **A key must have a name.** An empty label used to be legal and the list rendered
   it as the key's short hash — a row whose only distinguishing feature was a
   hexadecimal prefix, in a list whose whole job is telling keys apart. Create and

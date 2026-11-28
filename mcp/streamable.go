@@ -50,6 +50,15 @@ type streamClient struct {
 	// reaper measures (see idle.go), and it lives here rather than on *client because
 	// the SSE transport has its own liveness rule: its GET IS the session.
 	lastSeen atomic.Int64
+
+	// done is closed when the session ends, and it exists because closing a session used
+	// to leave its GET stream OPEN: the stream loop waits on the out channel, a closed
+	// session only clears the pointer and marks the client, and neither of those wakes a
+	// reader parked on the old channel. The keep-alive tick then wrote to a live
+	// connection, so nothing failed and nothing ended — the subscriber sat on a stream
+	// that could never carry another frame, which is the failure with no symptom.
+	done     chan struct{}
+	closeOne sync.Once
 }
 
 // streamOut is the channel behind that pointer. Wrapped so the pointer identity is
@@ -58,7 +67,7 @@ type streamClient struct {
 type streamOut struct{ ch chan []byte }
 
 func newStreamClient(id string) *streamClient {
-	sc := &streamClient{}
+	sc := &streamClient{done: make(chan struct{})}
 	sc.client = &client{id: id, write: sc.write}
 	return sc
 }
@@ -97,10 +106,16 @@ func (sc *streamClient) closeStream(out chan []byte) {
 	}
 }
 
-// close ends the session and wakes anyone waiting on it.
+// close ends the session and wakes anyone waiting on it — a pending call, and an
+// attached GET stream, which is the half that used to keep running.
+//
+// ONCE: the idle reaper and a DELETE can reach the same session, and the reaper drops it
+// from the map first, so this is not a second identity but a second report of the same
+// end. sync.Once is what keeps close(done) from panicking on the duplicate.
 func (sc *streamClient) close() {
 	sc.client.closeAll()
 	sc.out.Store(nil)
+	sc.closeOne.Do(func() { close(sc.done) })
 }
 
 // Dispatcher is everything a transport needs from the thing it serves: three calls,
@@ -355,6 +370,11 @@ func (s *StreamableHTTPServer) handleGet(w http.ResponseWriter, r *http.Request)
 		select {
 		case <-ctx.Done():
 			return
+		case <-sess.done:
+			// THE SESSION ENDED UNDER US. Returning closes the response, which is the only
+			// signal this transport has for "start over": a client reconnects, the GET names
+			// a session that no longer exists, and the 404 tells it to initialize again.
+			return
 		case <-keepAlive.C:
 			if err := writeSSEComment(w, flusher); err != nil {
 				return
@@ -413,6 +433,28 @@ func (s *StreamableHTTPServer) Shutdown(ctx context.Context) error {
 		s.srv.UnregisterSession(ctx, sess)
 	}
 	return nil
+}
+
+// EndSessions ends every session this transport holds, and leaves the transport usable:
+// the next initialize mints a new one.
+//
+// THIS IS "THE THING BEHIND THIS ENDPOINT IS GONE", which Shutdown cannot express — it
+// also refuses new sessions, and here the endpoint recovers (an on-demand extension is
+// restarted by the next request). A client that was attached finds its GET stream closed
+// and its next request answered 404, which is the protocol's way of saying "initialize
+// again"; without it a subscriber kept a stream that could never carry another frame.
+func (s *StreamableHTTPServer) EndSessions(ctx context.Context) int {
+	var sessions []*streamClient
+	s.sessions.Range(func(k, v any) bool {
+		s.sessions.Delete(k)
+		sessions = append(sessions, v.(*streamClient))
+		return true
+	})
+	for _, sess := range sessions {
+		sess.close()
+		s.srv.UnregisterSession(ctx, sess)
+	}
+	return len(sessions)
 }
 
 // isInitializeFrame reports whether a frame is an initialize request. It is
