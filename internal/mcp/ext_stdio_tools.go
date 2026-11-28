@@ -100,6 +100,14 @@ func (s *Server) stdioMCPChannel(handle string) string {
 // a fire-and-forget tool call has no answer to wait for, and waiting would spend the
 // caller's window on a reply nobody reads.
 func (s *Server) extStdioToolCall(ctx context.Context, stmt directive.Statement, handle, payload string, win termArgs, send bool) envelope.Slot {
+	// THE OBJECT FORM REACHES THIS DOOR TOO. An extension's stdio channel calls a tool by
+	// the same name and the same arguments shape as an HTTP peer, so an `args` object
+	// has to be folded in here as well — the one place it was not, a caller's
+	// parameters would vanish while the reply still said 200.
+	payload, badArgs := objectArgsPayload(stmt, payload, win)
+	if badArgs != nil {
+		return *badArgs
+	}
 	tool, args, bad := splitToolCallAt(stmt, payload, "call "+handle+" <tool> [<json-args>]")
 	if bad != nil {
 		return *bad

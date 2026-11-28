@@ -89,6 +89,16 @@ func termArgToolOptions() []mcp.ToolOption {
 				mcp.Description(d.Desc),
 				mcp.AdditionalProperties(map[string]any{"type": "string"}),
 			))
+		case argStringArrayOrObject:
+			// ONE NAME, TWO SHAPES (a type union, not two parameters): an array is the
+			// positional values for $1…, an object is the called tool's arguments. `items`
+			// still documents the array branch — JSON Schema reads it only for arrays —
+			// so a client that validates sees the element type as before.
+			out = append(out, mcp.WithArray(d.Name,
+				mcp.Description(d.Desc),
+				mcp.Items(map[string]any{"type": "string"}),
+				func(p map[string]any) { p["type"] = []string{"array", "object"} },
+			))
 		case argStringArray:
 			// A list of strings. `items` is what lets a client refuse `[1, 2]` before
 			// the call; readArgsArg enforces the same rule for the REST entrance.

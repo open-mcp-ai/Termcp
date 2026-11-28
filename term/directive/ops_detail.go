@@ -1172,6 +1172,26 @@ STANDARD USAGE:
   call internal mcp:1 search {"query":"error"}  invoke a tool and get its text (args optional)
   call a1f3:2 search {"query":"error"}      the same on an extension's stdio MCP channel
 
+WHERE A TOOL'S ARGUMENTS COME FROM (one source, and the line decides which):
+  call s mcp:1 search {"query":"error"}    written in the line
+  call s mcp:1 search $1                   a positional value (args: ["…"])
+  call s mcp:1 search $QUERY               a named value (vars, or secrets to keep it unlogged)
+  call s mcp:1 search                      args sent as an OBJECT: {"query": "error", "limit": 5}
+The object form is the one an agent should reach for: the arguments are JSON beside
+cmd, so no value passes through a quoting layer, and numbers and booleans keep their
+type (vars and secrets are string→string, so 3 would arrive as "3"). It fills the
+arguments slot only when the line leaves it empty — a line that writes both is refused
+rather than silently preferring one, because either choice drops something the caller
+sent and still answers 200.
+
+TWO CALLS, TWO ARGUMENT SETS: an object serves exactly one tool call, so a line that
+calls twice takes an ARRAY — and its elements may be objects too, which is what keeps
+the no-escaping property on the second call:
+  "cmd":  "call s mcp:1 term $1; call s mcp:1 term $2"
+  "args": [{"cmd":"ls"}, {"cmd":"help"}]
+One object with two calls is refused by name (which call it belongs to is not
+something the line says); so is one with no call, because nothing would read it.
+
   The :1 is the connection number, and it is part of the address: "mcp" alone works
   only while the session has exactly one MCP peer, and stops working the moment a
   second one is mounted. Copy the address "ls ext" prints rather than retyping it.

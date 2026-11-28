@@ -48,6 +48,13 @@ const (
 	// independent values rather than one blob. It exists for `args`: each element is
 	// one positional value, referenced as $1, $2, … in cmd.
 	argStringArray
+	// argStringArrayOrObject is one name with two shapes, told apart by JSON itself:
+	// an ARRAY is the positional values for $1…, an OBJECT is the arguments of the
+	// tool a `call <peer> <tool>` line invokes. It exists because the two are the
+	// same idea — what this call is passing — spelled the way the callee reads it,
+	// and a second parameter would make the caller learn a vocabulary the language
+	// already has (`foo(a, b)` and `foo(a: 1, b: 2)` share one name).
+	argStringArrayOrObject
 )
 
 // termArgDecl is one argument of the term tool.
@@ -305,9 +312,9 @@ var termArgDecls = []termArgDecl{
 	},
 	{
 		Name:    "args",
-		Kind:    argStringArray,
-		Desc:    "Values for $1…; cmd holds only the reference.",
-		DocNote: "Positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets`",
+		Kind:    argStringArrayOrObject,
+		Desc:    "$1… as an array; the tool's arguments as an object.",
+		DocNote: "**An object** is the arguments of the tool a `call <peer> <tool>` line invokes, and it fills that slot only when the line leaves it empty: `args: {\"query\": \"error\", \"limit\": 5}`. No value passes through a quoting layer, and numbers and booleans keep their type — which `vars` cannot do, because it is string→string. A line that spells its arguments both ways is refused rather than silently choosing one. Its elements may themselves be objects — `args: [{\"cmd\": \"ls\"}, {\"cmd\": \"pwd\"}]` with `call s mcp:1 term $1; call s mcp:1 term $2` is one argument set per call, and still no escaping. **An array** is positional values for `$1`, `$2`, … (1-based; `$0` is refused; `${10}` is the unambiguous form for ten or more). The reference must BE the payload: the value is the shell line, and cmd is DSL, so a reference beside other shell text is refused rather than guessed at. Nothing quotes or escapes the value — if you want one word, write the quotes inside the value. EVERY value must be referenced by cmd: a value nothing names is refused before anything runs, because a dropped argument is invisible in the reply. **These values ARE recorded in the server log** — as is anything typed literally into `cmd`, since a payload or a flag value is part of the command line. A password or a token belongs in `secrets`",
 		Def:     nil,
 		DefText: "",
 	},
@@ -498,11 +505,12 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 	}
 	w.Vars = named
 	w.Secrets = secrets
-	posArgs, derr := readArgsArg(args)
+	posArgs, argObj, derr := readArgsArg(args)
 	if derr != nil {
 		return termArgs{}, derr
 	}
 	w.Args = posArgs
+	w.ArgsObject = argObj
 	return w, nil
 }
 
@@ -514,25 +522,63 @@ func parseTermArgs(args map[string]any) (termArgs, *directive.Error) {
 // as data. Every element must be a string for the same reason vars values must be:
 // guessing that a JSON number meant its decimal spelling would put a value in the
 // substitution that the caller never sent.
-func readArgsArg(args map[string]any) ([]string, *directive.Error) {
+func readArgsArg(args map[string]any) ([]string, []byte, *directive.Error) {
 	raw, present := args["args"]
 	if !present || raw == nil {
-		return nil, nil
+		return nil, nil, nil
+	}
+	// TWO SHAPES, ONE NAME, AND JSON IS WHAT TELLS THEM APART. An array is the
+	// positional values for $1…, as before; an object is the arguments of the tool the
+	// line calls (`call <peer> <tool>`, payload left empty). Nothing here decides which
+	// line reads it — that is the dispatcher's job — because this function's only
+	// question is what the caller sent.
+	if obj, isObject := raw.(map[string]any); isObject {
+		// RE-SERIALISED RATHER THAN PASSED THROUGH, so the bytes that reach the tool are
+		// the caller's object and nothing else: Go sorts map keys, so the payload is
+		// deterministic (two identical calls send identical bytes), and a caller cannot
+		// smuggle a second word in through whitespace the JSON encoder would quote.
+		encoded, err := json.Marshal(obj)
+		if err != nil {
+			return nil, nil, &directive.Error{Msg: "args could not be read as a JSON object: " + err.Error()}
+		}
+		return nil, encoded, nil
 	}
 	list, ok := raw.([]any)
 	if !ok {
-		return nil, &directive.Error{Msg: "args must be an array of strings, got " + typeNameOf(raw) +
-			"; write it as [\"first\", \"second\"]"}
+		return nil, nil, &directive.Error{Msg: "args must be an array of strings or objects, or an object " +
+			"of the called tool's arguments, got " + typeNameOf(raw) +
+			"; write it as [\"first\", \"second\"] for positional values, [{\"name\": \"value\"}] for one " +
+			"argument set per call, or {\"name\": \"value\"} for a single tool call"}
 	}
 	out := make([]string, len(list))
 	for i, v := range list {
-		s, isString := v.(string)
-		if !isString {
-			return nil, &directive.Error{Msg: "args[" + strconv.Itoa(i) + "] must be a string, got " + typeNameOf(v)}
+		// AN ELEMENT MAY BE AN OBJECT, and it is re-serialised as the value that fills
+		// that position: `args: [{"cmd":"ls"}, {"cmd":"pwd"}]` with
+		// `call s mcp:1 term $1; call s mcp:1 term $2` is one call per tool, each with
+		// its own arguments, and no JSON string has to survive a quoting layer. Without
+		// it the object form would work for one call and only one — the asymmetry would
+		// be "the shape that needs no escaping is the shape you cannot use twice".
+		//
+		// ANYTHING ELSE IS STILL REFUSED. A number or a null has no single spelling as a
+		// value in a shell line (3, "3", 3.0), and guessing one would put bytes in the
+		// command that the caller never sent — the same reason vars values must be
+		// strings.
+		switch elem := v.(type) {
+		case string:
+			out[i] = elem
+		case map[string]any:
+			encoded, err := json.Marshal(elem)
+			if err != nil {
+				return nil, nil, &directive.Error{Msg: "args[" + strconv.Itoa(i) +
+					"] could not be read as a JSON object: " + err.Error()}
+			}
+			out[i] = string(encoded)
+		default:
+			return nil, nil, &directive.Error{Msg: "args[" + strconv.Itoa(i) +
+				"] must be a string or an object, got " + typeNameOf(v)}
 		}
-		out[i] = s
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 // readNamedArg reads one named-value dictionary: vars or secrets.

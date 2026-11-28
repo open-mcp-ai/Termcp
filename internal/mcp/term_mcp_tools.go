@@ -29,6 +29,10 @@ import (
 // mcpToolCall builds the tools/call envelope for `call <session> mcp:1 <tool> <json>`
 // and renders the answer as the TEXT the tool returned.
 func (s *Server) mcpToolCall(ctx context.Context, stmt directive.Statement, h *jrpcHandle, payload string, win termArgs) envelope.Slot {
+	payload, badPayload := objectArgsPayload(stmt, payload, win)
+	if badPayload != nil {
+		return *badPayload
+	}
 	name, args, bad := splitToolCall(stmt, payload)
 	if bad != nil {
 		return *bad
@@ -61,6 +65,43 @@ func (s *Server) mcpToolCall(ctx context.Context, stmt directive.Statement, h *j
 		return s.frameReply(ctx, stmt, h, reply, win)
 	}
 	return s.mcpResultText(ctx, stmt, h, reply, win)
+}
+
+// objectArgsPayload folds an `args` OBJECT into the payload the tool call reads.
+//
+// THE ARGUMENTS SLOT HAS ONE SOURCE, and the object is one of them: it fills the slot
+// the line leaves empty (`call <peer> <tool>` with nothing after the tool name). A line
+// that spells arguments in both places is refused rather than silently preferring one —
+// the reply is a 200 either way, so a caller whose parameters were dropped has nothing
+// to notice.
+func objectArgsPayload(stmt directive.Statement, payload string, win termArgs) (string, *envelope.Slot) {
+	if len(win.ArgsObject) == 0 {
+		return payload, nil
+	}
+	if toolArgsWritten(payload) {
+		slot := badRequest(stmt, "this call names its arguments twice: `args` is an object, and the line "+
+			"also spells them after the tool name. An object `args` IS the arguments of a `call <peer> <tool>` "+
+			"line that leaves the slot empty; pick one source")
+		return "", &slot
+	}
+	// THE OBJECT RIDES IN THE POSITION THE SLOT ALWAYS HAD, so one reader
+	// (splitToolCall) handles both spellings and the two cannot drift.
+	return strings.TrimSpace(payload) + " " + string(win.ArgsObject), nil
+}
+
+// toolArgsWritten says the line spelled arguments after the tool name, which is the
+// other source the `args` object cannot share a call with.
+//
+// A TOOL NAME IS ONE WORD: the payload is normalized to "<tool> <json>", so anything
+// after the first word IS written arguments — including a second word, which
+// splitToolCall would then refuse as unparseable JSON. Refusing here names the real
+// conflict instead of the symptom.
+func toolArgsWritten(payload string) bool {
+	trimmed := strings.TrimSpace(payload)
+	if i := strings.IndexAny(trimmed, " \t\n"); i >= 0 {
+		return strings.TrimSpace(trimmed[i+1:]) != ""
+	}
+	return false
 }
 
 // splitToolCall reads the tool name and its arguments out of the payload.

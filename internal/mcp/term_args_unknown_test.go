@@ -80,6 +80,10 @@ func sampleValueFor(kind argKind) any {
 		return "ls"
 	case argStringArray:
 		return []any{"echo hi"}
+	case argStringArrayOrObject:
+		// Either shape is legal; the array is the one that needs no tool call to read
+		// it, so it is what "is this name accepted" should be asked with.
+		return []any{"echo hi"}
 	case argMap:
 		return map[string]any{"V": "echo hi"}
 	case argNumber:

@@ -1,6 +1,20 @@
 # Changelog
 
 ## Unreleased
+- **`args` carries a tool's arguments as an object.** A `call <peer> <tool>` line has
+  always taken its arguments either in the line or through `$1`/`$NAME`, which means a
+  JSON body had to survive a quoting layer to get there — and `vars`/`secrets` are
+  string→string, so `{"timeout": 3}` arrived as `"3"`. `args` now accepts an object
+  beside an array: an array is the positional values for `$1…` (unchanged), an object
+  is the arguments of the tool the line calls, filling the slot only when the line
+  leaves it empty. JSON itself tells the two apart, so no new name had to be learned —
+  `foo(a, b)` and `foo(a: 1, b: 2)` are one method name in every language that has both.
+  A line that spells its arguments twice is refused by name rather than silently
+  preferring one (either choice drops something the caller sent and still answers 200).
+  So is an object `args` with no tool call to read it, and one with two: the object is
+  one call's arguments, so a line that calls no tool has no reader for it and a line
+  that calls two does not say which. A shell statement beside a single tool call still
+  works — `ls; call s mcp:1 term` with the object is one turn, not two.
 - **A key must have a name.** An empty label used to be legal and the list rendered
   it as the key's short hash — a row whose only distinguishing feature was a
   hexadecimal prefix, in a list whose whole job is telling keys apart. Create and

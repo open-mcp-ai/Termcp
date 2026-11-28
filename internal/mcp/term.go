@@ -113,7 +113,12 @@ type termArgs struct {
 	// Encoding is the charset the terminal writes in, as a DEFAULT for every read in this
 	// call (issue #304). A statement's own `--encoding` still wins: the caller who wrote it
 	// into a line meant that line.
-	Encoding        string
+	Encoding string
+	// ArgsObject is `args` sent as a JSON object instead of an array: the arguments of
+	// the tool a `call <peer> <tool>` line invokes, when that line leaves its payload
+	// empty. The two shapes are one name because they are one idea — what this call
+	// passes — and JSON already tells them apart.
+	ArgsObject      []byte
 	LinesLimit      int
 	TotalBytesLimit int
 	OnBytesOverflow string
@@ -482,8 +487,87 @@ func (s *Server) executeTerm(ctx context.Context, cmd string, win termArgs) term
 	if file.Empty {
 		return s.termGuide(ctx, win)
 	}
+	if slot, bad := objectArgsSlot(file.Statements, win); bad {
+		return termReply{win: win, slots: []envelope.Slot{slot}}
+	}
 
 	return s.runStatements(ctx, file.Statements, win)
+}
+
+// objectArgsSlot refuses an `args` OBJECT that no statement would read, or that more
+// than one would.
+//
+// THE QUESTION IS HOW MANY TOOL CALLS THE LINE HAS, not whether every statement is
+// one: `args` is a per-call table, so it can serve exactly one tool call, and a line
+// that also runs a shell statement is ordinary (`ls; call s mcp:1 term`). Refusing
+// that shape would misdescribe it — the line does call a tool. What cannot be
+// answered is zero readers (nothing would consume it: a 200 with the caller's
+// parameters gone) and two (which call it belongs to is not something the line says).
+//
+// The check runs here rather than at the reader because the reader is reached per
+// statement: by then the batch has already dispatched the statements that did not
+// want the object, and a refusal would arrive after side effects.
+func objectArgsSlot(stmts []directive.Statement, win termArgs) (envelope.Slot, bool) {
+	if len(win.ArgsObject) == 0 {
+		return envelope.Slot{}, false
+	}
+	var calls []directive.Statement
+	for _, st := range stmts {
+		if isToolCallStatement(st) {
+			calls = append(calls, st)
+		}
+	}
+	var body string
+	switch {
+	case len(calls) == 1:
+		return envelope.Slot{}, false
+	case len(calls) == 0:
+		body = "`args` was sent as an object, which is the arguments of a `call <peer> <tool>` " +
+			"line — and this line calls no tool by name, so nothing would read it. Send `args` as an " +
+			"array for $1…, or put the object on the tool call it belongs to"
+	default:
+		body = "`args` was sent as an object, but this line makes " + strconv.Itoa(len(calls)) +
+			" tool calls: an object `args` is ONE call's arguments, and which call it belongs to is " +
+			"not something the line says. Split them into separate calls, or write each call's " +
+			"arguments in its own line"
+	}
+	// The refusal points at the statement the caller must change: the tool call when
+	// there is one (two calls), else the first statement (no call at all).
+	subject := stmts[0]
+	if len(calls) > 0 {
+		subject = calls[0]
+	}
+	slot := badRequest(subject, body)
+	// A DRY RUN REPORTS THIS AS A VERDICT, not as a bare refusal (#241): the headers are
+	// what tell a harness "checked and rejected" from "not checked at all", and this
+	// check runs before the funnel that adds them.
+	if win.DryRun {
+		slot.Headers["Dry-Run"] = "true"
+		slot.Headers["Verdict"] = "invalid"
+	}
+	return slot, true
+}
+
+// isToolCallStatement says this statement is `call <peer> <tool>` with an empty
+// payload slot — the one shape that reads an object `args`.
+//
+// The peer spelling is not checked: `mcp:1` and an extension's channel address both
+// end at the same reader (mcpToolCall), and a name this build does not know is
+// answered by that reader with its own 404 rather than here.
+func isToolCallStatement(st directive.Statement) bool {
+	if st.Op != "call" {
+		return false
+	}
+	// THE FIRST WORD DECIDES: `call <session> mcp:<n> <tool> [<json-args>]` starts with
+	// the tool name, and a raw frame starts with '{' — the door that reads bytes, not an
+	// arguments object (#159). A line that ALSO spells arguments ("term {…}") still
+	// calls a tool, so it belongs to mcpToolCall, where the two-source conflict is
+	// answered by name; refusing it here as "no tool call" would misdescribe the line.
+	fields := strings.Fields(st.Payload)
+	if len(fields) == 0 {
+		return false
+	}
+	return !strings.HasPrefix(unquoteWord(fields[0]), "{")
 }
 
 // runStatements dispatches already-parsed statements and assembles the reply.
