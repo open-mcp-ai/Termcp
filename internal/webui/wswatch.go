@@ -3,7 +3,6 @@ package webui
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/session"
@@ -200,6 +199,23 @@ func (c *uiWS) runWatch(ctx context.Context, shell *session.ChildShell, sid stri
 		return true
 	}
 
+	// finish ends the stream: the batch in hand goes first (it is the shell's final
+	// output), then the marker that says so. Two callers — the read erroring and the
+	// state check at the bottom — and they are the same event seen from two sides.
+	finish := func() {
+		if !flush() {
+			return
+		}
+		payload, err := json.Marshal(map[string]any{
+			"type":   "terminal_done",
+			"id":     sid,
+			"cursor": shell.ReaderCursor(ent.rid),
+		})
+		if err == nil {
+			c.sendControlPayload(payload)
+		}
+	}
+
 	for {
 		if ctx.Err() != nil {
 			return
@@ -224,22 +240,14 @@ func (c *uiWS) runWatch(ctx context.Context, shell *session.ChildShell, sid stri
 			if ctx.Err() != nil {
 				return
 			}
-			// EOF: buffer closed (shell exited but session kept alive for multiplexing).
-			if err == io.EOF {
-				// Whatever the batch still holds belongs to the shell's final output
-				// and must precede the marker that ends it.
-				if !flush() {
-					return
-				}
-				payload, _ := json.Marshal(map[string]any{
-					"type":   "terminal_done",
-					"id":     sid,
-					"cursor": shell.ReaderCursor(ent.rid),
-				})
-				c.sendControlPayload(payload)
-				return
-			}
-			continue
+			// EVERY ERROR A READ CAN RETURN HERE IS THE END, so nothing continues (issue
+			// #359 follow-up). The two the buffer answers — io.EOF once it is sealed,
+			// ErrReader once our reader is gone — never clear, so `continue` made this
+			// loop a core with no bytes in it. The EOF branch that used to sit here never
+			// ran at all: ReadTerminalStream maps io.EOF to an EMPTY READ, which is why the
+			// end is detected by the state check below rather than by a returned error.
+			finish()
+			return
 		}
 		if out != "" {
 			end := shell.ReaderCursor(ent.rid)
@@ -277,17 +285,7 @@ func (c *uiWS) runWatch(ctx context.Context, shell *session.ChildShell, sid stri
 		}
 		info := shell.Info()
 		if (info.Status != api.SessionRunning || shell.IsBufferClosed()) && !shell.HasMoreOutput(ent.rid) {
-			if !flush() {
-				return
-			}
-			payload, err := json.Marshal(map[string]any{
-				"type":   "terminal_done",
-				"id":     sid,
-				"cursor": shell.ReaderCursor(ent.rid),
-			})
-			if err == nil {
-				c.sendControlPayload(payload)
-			}
+			finish()
 			return
 		}
 	}

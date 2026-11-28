@@ -187,8 +187,16 @@ func (p *extPump) run(ctx context.Context) {
 			// peer's pipe is closed a read returns nothing with no error, immediately and
 			// for ever — which spun this loop and left the pump convinced the channel was
 			// alive, so nothing downstream was ever told it had ended. Alive() is the
-			// measurement of the process rather than the published status (internal/session).
-			if !child.Alive() {
+			// measurement of the process rather than the published status (internal/session);
+			// IsBufferClosed is the other fact that means "no byte will ever arrive again" —
+			// a sealed transcript, which outlives a process that is still there.
+			//
+			// ponytail: a transcript that STOPPED (a failed append — "stopping transcript")
+			// leaves the buffer open and the process alive with no writer, and nothing
+			// observable says so. This loop then waits the window for ever without ending
+			// the subscriptions. A writer-gone flag on ChildShell is the fix when a case
+			// needs it; exit and seal are what this covers, and they are what happens.
+			if !child.Alive() || child.IsBufferClosed() {
 				p.failAll("the extension's channel ended")
 				return
 			}
