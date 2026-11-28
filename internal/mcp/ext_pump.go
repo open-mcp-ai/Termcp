@@ -33,6 +33,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/mcp"
@@ -69,16 +70,20 @@ type extPump struct {
 	// an idle extension, and a client that is attached and receiving pushes is not idle.
 	sessID string
 
-	mu      sync.Mutex
-	waiters map[string]chan []byte
-	minted  int
-	// initialized caches the peer's answer to initialize. N clients means one handshake:
-	// the peer's serverInfo and capabilities are the same for all of them, and a second
+	// waiters is keyed by minted id, and NO INVARIANT SPANS TWO KEYS: a waiter is claimed
+	// by exactly one reader, with LoadAndDelete deciding who got it. That is a sync.Map
+	// rather than a lock over a map (AGENTS.md).
+	waiters sync.Map // minted id string -> chan []byte
+	// minted is a counter, so it is one atomic.
+	minted atomic.Int64
+	// init caches the peer's answer to initialize. N clients means one handshake: the
+	// peer's serverInfo and capabilities are the same for all of them, and a second
 	// handshake on a line-delimited stdio peer is a second state machine nobody needs.
-	initialized bool
-	initReply   []byte
+	// `reply` is published as a whole value because "initialized" and "with what answer"
+	// are one fact.
+	init atomic.Pointer[pumpInit]
 	// initSeen records that notifications/initialized was delivered to the peer once.
-	initSeen bool
+	initSeen atomic.Bool
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -95,12 +100,11 @@ func (s *Server) extPumpFor(shellID string) (*extPump, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &extPump{
-		s:       s,
-		shell:   shellID,
-		sessID:  child.ParentSessionID(),
-		waiters: map[string]chan []byte{},
-		cancel:  cancel,
-		done:    make(chan struct{}),
+		s:      s,
+		shell:  shellID,
+		sessID: child.ParentSessionID(),
+		cancel: cancel,
+		done:   make(chan struct{}),
 	}
 	actual, loaded := s.extPumps.LoadOrStore(shellID, p)
 	if loaded {
@@ -114,12 +118,15 @@ func (s *Server) extPumpFor(shellID string) (*extPump, error) {
 // stop ends the pump and wakes every waiter with the reason.
 func (p *extPump) stop(reason string) {
 	p.cancel()
-	p.mu.Lock()
-	for id, ch := range p.waiters {
-		close(ch)
-		delete(p.waiters, id)
-	}
-	p.mu.Unlock()
+	// LOADANDDELETE DECIDES WHO CLOSES: a waiter already claimed by route (which read and
+	// removed it before sending the reply) must not be closed here, and closing a channel
+	// twice panics.
+	p.waiters.Range(func(k, _ any) bool {
+		if v, ok := p.waiters.LoadAndDelete(k); ok {
+			close(v.(chan []byte))
+		}
+		return true
+	})
 	p.s.extPumps.Delete(p.shell)
 }
 
@@ -207,13 +214,8 @@ func (p *extPump) route(ctx context.Context, frame []byte) {
 		// THE KEY IS THE RAW SPELLING, quotes and all: `"1"` and `1` are different ids, and
 		// normalising here would answer a client whose id merely looked similar.
 		id := mintedKey(strings.TrimSpace(string(*env.ID)))
-		p.mu.Lock()
-		ch, ok := p.waiters[id]
-		if ok {
-			delete(p.waiters, id)
-		}
-		p.mu.Unlock()
-		if ok {
+		if v, ok := p.waiters.LoadAndDelete(id); ok {
+			ch := v.(chan []byte)
 			// THE BYTES PASS THROUGH; ONLY THE ID IS PUT BACK. A reply body is the
 			// extension's answer, and the client compares it by the id it sent.
 			ch <- frame
@@ -228,11 +230,21 @@ func (p *extPump) tr() *mcpStreamable {
 
 // failAll wakes every waiter with a message instead of leaving them to time out.
 func (p *extPump) failAll(reason string) {
-	p.mu.Lock()
-	waiters := p.waiters
-	p.waiters = map[string]chan []byte{}
-	p.mu.Unlock()
-	for id, ch := range waiters {
+	var waiters []struct {
+		id string
+		ch chan []byte
+	}
+	p.waiters.Range(func(k, v any) bool {
+		if claimed, ok := p.waiters.LoadAndDelete(k); ok {
+			waiters = append(waiters, struct {
+				id string
+				ch chan []byte
+			}{k.(string), claimed.(chan []byte)})
+		}
+		return true
+	})
+	for _, w := range waiters {
+		id, ch := w.id, w.ch
 		// THE KEY IS THE UNQUOTED MINTED ID (`tc7`), and a JSON-RPC id has to be valid JSON:
 		// handing the bare token to json.Marshal failed, and the client got the generic
 		// "internal error" instead of the sentence saying what happened.
@@ -257,21 +269,18 @@ func (p *extPump) ask(ctx context.Context, frame string) []byte {
 	}
 	origID := strings.TrimSpace(string(env.ID))
 
-	p.mu.Lock()
 	// INITIALIZE IS ANSWERED FROM THE CACHE AFTER THE FIRST ONE. The peer's identity does
 	// not change between clients, and a second handshake against a stdio server is a
 	// second session in a process that has one.
-	if env.Method == "initialize" && p.initialized {
-		cached := p.initReply
-		p.mu.Unlock()
-		return rewriteFrameID(cached, origID)
+	if env.Method == "initialize" {
+		if cached := p.init.Load(); cached != nil {
+			return rewriteFrameID(cached.reply, origID)
+		}
 	}
-	p.minted++
-	minted := fmt.Sprintf(`"tc%d"`, p.minted)
+	minted := fmt.Sprintf(`"tc%d"`, p.minted.Add(1))
 	ch := make(chan []byte, 1)
 	key := mintedKey(minted)
-	p.waiters[key] = ch
-	p.mu.Unlock()
+	p.waiters.Store(key, ch)
 
 	if err := p.s.extWriteLine(ctx, p.shell, rewriteFrameIDRaw(frame, minted)); err != nil {
 		p.forget(key)
@@ -291,9 +300,7 @@ func (p *extPump) ask(ctx context.Context, frame string) []byte {
 			// instead of its own constant, so a client negotiates against the version the
 			// extension actually implements.
 			p.s.noteExtVersion(p.s.extNameOfShell(p.shell), initializeVersion(reply))
-			p.mu.Lock()
-			p.initialized, p.initReply = true, out
-			p.mu.Unlock()
+			p.init.Store(&pumpInit{reply: out})
 		}
 		return out
 	case <-timer.C:
@@ -314,12 +321,13 @@ func (p *extPump) ask(ctx context.Context, frame string) []byte {
 // on the first one, and sending it again is a second state transition in a process that
 // has already made it.
 func (p *extPump) note(ctx context.Context, frame, method string) []byte {
-	p.mu.Lock()
-	dup := method == "notifications/initialized" && p.initSeen
+	// ONE DELIVERY, WHOEVER WINS THE RACE: CompareAndSwap is what makes the second
+	// client's notifications/initialized a no-op instead of a second state transition in
+	// a process that has already made it.
+	dup := false
 	if method == "notifications/initialized" {
-		p.initSeen = true
+		dup = !p.initSeen.CompareAndSwap(false, true)
 	}
-	p.mu.Unlock()
 	if dup {
 		return nil
 	}
@@ -330,10 +338,11 @@ func (p *extPump) note(ctx context.Context, frame, method string) []byte {
 }
 
 func (p *extPump) forget(id string) {
-	p.mu.Lock()
-	delete(p.waiters, id)
-	p.mu.Unlock()
+	p.waiters.Delete(id)
 }
+
+// pumpInit is the cached handshake answer: the bytes to replay, rewritten per client.
+type pumpInit struct{ reply []byte }
 
 // splitFrames cuts raw output into complete lines, returning the leftover tail.
 //
