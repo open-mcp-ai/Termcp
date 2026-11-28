@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+
+## v0.2.10-rc.3 — 2026-11-28
+
 - **The instance's own MCP endpoint can subscribe to extension events.** A peer that
   speaks on its own (`notifications/<its own name>/<event>`) used to reach only a client
   attached to `/ext/{name}/stream`, so watching several extensions meant holding one MCP
@@ -67,6 +70,7 @@
   implemented on the server (`X-Termcp-Password`) with no UI at all, and the import
   dialog could not supply one, so a sealed `.enc` file downloaded from the page could
   not be opened again from the page; both ends speak it now.
+
 ## v0.2.10-rc.2 — 2026-11-28
 
 - **A key must have a name.** An empty label used to be legal and the list rendered
