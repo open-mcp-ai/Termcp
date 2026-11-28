@@ -317,6 +317,27 @@ func (s *Server) hasExtEventSubscribers(name string) bool {
 	return s.extEvents != nil && len(s.extEvents.targets(name)) > 0
 }
 
+// hasExtWatchers answers the reconciler's question in full: is anybody WATCHING this
+// extension, by either door.
+//
+// TWO DOORS, ONE ANSWER, and they used to differ. A subscriber on the main endpoint says
+// so in the table; a client attached to /ext/{name}/stream says so by holding a GET
+// stream — and that stream is invisible to the reconciler, which only sees requests. So a
+// client could sit on an extension endpoint, receive nothing for an idle window (a quiet
+// peer is not a broken one), and have the peer reaped out from under it; the death is
+// visible since the session ends, but it should not have happened. An attached stream is
+// the strongest evidence of use there is: somebody is waiting for the next frame.
+func (s *Server) hasExtWatchers(name string) bool {
+	if s.hasExtEventSubscribers(name) {
+		return true
+	}
+	v, ok := s.extTransports.Load(name)
+	if !ok {
+		return false
+	}
+	return v.(*mcpStreamable).HasAttachedStream()
+}
+
 // publishExtState tells subscribers that an extension's channel ended.
 //
 // A SEPARATE METHOD FROM THE EVENT, and a frame with `state` instead of `method`: a

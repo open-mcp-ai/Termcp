@@ -221,7 +221,7 @@ func (s *Server) SetExtensionReconciler(r *extensions.Reconciler) {
 	// peer's normal state is silence, so the idle window would reap exactly the peer
 	// somebody is listening to.
 	if r != nil {
-		r.SetWatched(s.hasExtEventSubscribers)
+		r.SetWatched(s.hasExtWatchers)
 	}
 	// A TEMPLATE'S `alias` TABLE IS A COMMAND SOURCE, resolved on demand rather than
 	// copied into the table: editing a template (or upgrading it) then takes effect

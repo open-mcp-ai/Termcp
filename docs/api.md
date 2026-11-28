@@ -2487,7 +2487,10 @@ created after the subscription.
 A subscription also keeps the peer alive: an event-only extension is never "used" in the
 sense the idle window measures, so a watched extension is not reaped, and subscribing to a
 lazy template that is not running starts it (the reply does not wait for the start — a peer
-that cannot come up shows where peers always show, in `ls ext` and its retry state).
+that cannot come up shows where peers always show, in `ls ext` and its retry state). A
+client holding an open `GET` stream on `/ext/{name}/stream` counts as watching in the same
+way: somebody is waiting for the next frame, which is the strongest evidence of use there
+is, even though the reconciler only ever sees requests.
 
 When the extension's channel ends — the process exited, or the template was changed —
 subscribers receive `notifications/termcp/ext_state` with `{"extension":"<name>","state":"ended"}`.

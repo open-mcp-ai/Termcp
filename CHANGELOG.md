@@ -12,7 +12,8 @@
   that was not attached missed it, and the reply says so. A subscription also counts as
   use: a watched extension is not idle-reaped (an event-only peer is never "asked"
   anything, so the window would otherwise remove exactly the peer somebody is listening
-  to), subscribing starts a lazy one, and the channel ending reaches subscribers as
+  to — a client holding an open `GET` stream on `/ext/{name}/stream` counts as watching
+  too, not just a subscription), subscribing starts a lazy one, and the channel ending reaches subscribers as
   `notifications/termcp/ext_state` instead of as silence.
 
 - **`--until` no longer matches a colourised echo of your own command.** A shell that

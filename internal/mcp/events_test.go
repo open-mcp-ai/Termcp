@@ -305,6 +305,63 @@ func TestThePumpDeliversToASubscriberOfTheMainEndpoint(t *testing.T) {
 	}
 }
 
+// THE OTHER DOOR COUNTS TOO: a client attached to /ext/{name}/stream holds a GET stream,
+// and that is a listener — the reconciler only sees requests, so without this an attached
+// client could watch its peer get reaped for being quiet.
+func TestAnAttachedExtStreamCountsAsWatching(t *testing.T) {
+	s := newExtensionTestServer(t)
+	script := writeScript(t, chattyPeerStub)
+	callExtension(t, s, map[string]any{
+		"action": "create", "name": "chatty", "target": "internal",
+		"command": "sh", "args": []any{script}, "enabled": true,
+	})
+	useExtension(t, s, "chatty")
+
+	if s.hasExtWatchers("chatty") {
+		t.Fatal("an extension nobody is listening to reports itself as watched")
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/ext/{name}/stream", s.ExtMCPHandler())
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+	url := ts.URL + "/ext/chatty/stream"
+
+	init := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","clientInfo":{"name":"watcher","version":"1"}}}`
+	resp, err := http.Post(url, "application/json", strings.NewReader(init))
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	sid := resp.Header.Get("Mcp-Session-Id")
+
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set("Mcp-Session-Id", sid)
+	stream, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Body.Close()
+	if stream.StatusCode != http.StatusOK {
+		t.Fatalf("GET answered %d, want the stream", stream.StatusCode)
+	}
+
+	// ATTACHED IS A STATE: the handler flushes its headers after openStream, so Do
+	// returning is the moment to ask — but poll anyway, because the tick between the
+	// flush and the snapshot is the machine's, not the test's.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if s.hasExtWatchers("chatty") {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("an attached GET stream did not count as watching")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // A SUBSCRIBED EXTENSION IS NOT IDLE, even though nobody is asking it anything — which
 // is the whole point of watching an event-only peer.
 func TestASubscriptionKeepsTheExtensionFromBeingReaped(t *testing.T) {
@@ -313,7 +370,7 @@ func TestASubscriptionKeepsTheExtensionFromBeingReaped(t *testing.T) {
 	s.mcpServer.RegisterSession(context.Background(), sess)
 	subscribeAs(t, s, sess, "peer")
 
-	if !s.hasExtEventSubscribers("peer") {
+	if !s.hasExtWatchers("peer") {
 		t.Fatal("a subscribed extension does not report itself as watched")
 	}
 	// The predicate is what the reconciler consults; this asserts the wiring rather than
@@ -322,7 +379,7 @@ func TestASubscriptionKeepsTheExtensionFromBeingReaped(t *testing.T) {
 		t.Fatal("no reconciler wired")
 	}
 	s.mcpServer.UnregisterSession(context.Background(), sess)
-	if s.hasExtEventSubscribers("peer") {
+	if s.hasExtWatchers("peer") {
 		t.Fatal("the extension is still watched after its only subscriber left")
 	}
 }

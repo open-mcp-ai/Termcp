@@ -237,6 +237,26 @@ func (s *StreamableHTTPServer) Broadcast(frame []byte) int {
 	return sent
 }
 
+// HasAttachedStream reports whether any session of this transport has an open GET
+// stream, i.e. whether somebody is currently LISTENING.
+//
+// IT EXISTS FOR KEEPALIVE DECISIONS the transport cannot make itself: a server-side
+// caller that owns the thing this endpoint serves (an extension's process) has to know
+// whether "silence" means nobody cares, and a listening client is the answer to that —
+// a frame will reach it, so the thing behind the endpoint must stay up. The transport's
+// own idle rule asks the same question (idle.go), which is why it lives beside it.
+func (s *StreamableHTTPServer) HasAttachedStream() bool {
+	attached := false
+	s.sessions.Range(func(_, v any) bool {
+		if v.(*streamClient).hasOpenStream() {
+			attached = true
+			return false
+		}
+		return true
+	})
+	return attached
+}
+
 // ServeHTTP dispatches on the verb.
 func (s *StreamableHTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
