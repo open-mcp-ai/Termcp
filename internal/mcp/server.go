@@ -217,6 +217,12 @@ func (s *Server) SetDataDir(dir string) {
 // of silently accepting templates it never connects.
 func (s *Server) SetExtensionReconciler(r *extensions.Reconciler) {
 	s.extensions = r
+	// A SUBSCRIBED EXTENSION IS NOT IDLE (see extensions.SetWatched): an event-only
+	// peer's normal state is silence, so the idle window would reap exactly the peer
+	// somebody is listening to.
+	if r != nil {
+		r.SetWatched(s.hasExtEventSubscribers)
+	}
 	// A TEMPLATE'S `alias` TABLE IS A COMMAND SOURCE, resolved on demand rather than
 	// copied into the table: editing a template (or upgrading it) then takes effect
 	// on the next command, with nothing to invalidate and no second copy to drift.

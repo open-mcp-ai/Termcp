@@ -390,6 +390,12 @@ func (r *Reconciler) sweepInstances(name string, ext *Extension, st *extState, l
 // promise, the walk because a promise kept only by a timer is one missed callback
 // away from a process nobody will ever close.
 func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int {
+	// A WATCHED EXTENSION IS IN USE even though nobody has asked it anything (SetWatched).
+	// This is the one seam the timer and the walk both pass through, so the rule cannot
+	// hold on one road and not the other.
+	if r.watched != nil && r.watched(name) {
+		return 0
+	}
 	reason := "idle for " + limit.Round(time.Second).String() + " with nothing asked of it"
 	// dueExtras records the close with the removal (see its comment): by the time
 	// this returns, the instance is gone AND the reason is readable.

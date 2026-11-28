@@ -277,6 +277,9 @@ func (s *Server) closeExtSessions(name string) int {
 		return 0
 	}
 	s.extShells.Delete(name)
+	// THE SUBSCRIBERS ARE TOLD, in their own vocabulary: an extension that goes quiet and
+	// an extension that is gone are the same bytes otherwise.
+	s.publishExtState(context.Background(), name, "ended")
 	v, ok := s.extTransports.Load(name)
 	if !ok {
 		return 0

@@ -2484,6 +2484,17 @@ listening `GET` stream; the peer's method name and payload are unchanged inside 
 envelope, so a subscriber filters by what the peer called it. `*` also covers extensions
 created after the subscription.
 
+A subscription also keeps the peer alive: an event-only extension is never "used" in the
+sense the idle window measures, so a watched extension is not reaped, and subscribing to a
+lazy template that is not running starts it (the reply does not wait for the start — a peer
+that cannot come up shows where peers always show, in `ls ext` and its retry state).
+
+When the extension's channel ends — the process exited, or the template was changed —
+subscribers receive `notifications/termcp/ext_state` with `{"extension":"<name>","state":"ended"}`.
+That frame carries `state` and no `method`, so "the peer said something" and "the peer is
+gone" cannot be mistaken for one another; the same event reaches a client attached to
+`/ext/{name}/stream` as the end of its MCP session.
+
 There is no replay: a frame that arrived while the client was not attached is gone, and
 the subscribe answer says so in words rather than leaving it to be discovered. `dropped`
 counts frames a subscriber could not take (no open `GET` stream, or not reading), which is

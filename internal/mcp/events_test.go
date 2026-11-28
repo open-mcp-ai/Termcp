@@ -304,3 +304,51 @@ func TestThePumpDeliversToASubscriberOfTheMainEndpoint(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// A SUBSCRIBED EXTENSION IS NOT IDLE, even though nobody is asking it anything — which
+// is the whole point of watching an event-only peer.
+func TestASubscriptionKeepsTheExtensionFromBeingReaped(t *testing.T) {
+	s := extPeerFixture(t, "peer")
+	sess := &recordingSession{id: "s-9"}
+	s.mcpServer.RegisterSession(context.Background(), sess)
+	subscribeAs(t, s, sess, "peer")
+
+	if !s.hasExtEventSubscribers("peer") {
+		t.Fatal("a subscribed extension does not report itself as watched")
+	}
+	// The predicate is what the reconciler consults; this asserts the wiring rather than
+	// a duration, because the reconciler's own test of the rule lives with the reflector.
+	if s.extensions == nil {
+		t.Fatal("no reconciler wired")
+	}
+	s.mcpServer.UnregisterSession(context.Background(), sess)
+	if s.hasExtEventSubscribers("peer") {
+		t.Fatal("the extension is still watched after its only subscriber left")
+	}
+}
+
+// THE END OF THE CHANNEL IS A FRAME, not silence: an extension that stopped and an
+// extension that is merely quiet carry the same bytes otherwise.
+func TestSubscribersAreToldWhenTheExtensionsChannelEnds(t *testing.T) {
+	s := extPeerFixture(t, "peer")
+	sess := &recordingSession{id: "s-10"}
+	subscribeAs(t, s, sess, "peer")
+
+	s.closeExtSessions("peer")
+
+	notes := sess.got()
+	if len(notes) != 1 {
+		t.Fatalf("delivered %d notifications, want the one state frame: %v", len(notes), notes)
+	}
+	if notes[0].method != extStateMethod {
+		t.Fatalf("method = %q, want %q", notes[0].method, extStateMethod)
+	}
+	if notes[0].params["state"] != "ended" || notes[0].params["extension"] != "peer" {
+		t.Fatalf("the state frame does not say what ended: %v", notes[0].params)
+	}
+	// AND IT IS NOT AN EVENT: a subscriber branching on `method` must not see a state
+	// frame as something the peer said.
+	if _, looksLikeEvent := notes[0].params["method"]; looksLikeEvent {
+		t.Fatalf("a state frame carries a peer method: %v", notes[0].params)
+	}
+}

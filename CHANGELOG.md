@@ -9,7 +9,11 @@
   extension's name so a subscriber knows who spoke; `termcp/subscriptions` reads the set
   back with `delivered` / `dropped` counters, and a name that is not an extension is
   refused with the ones that are. Delivery is from-now-on: no replay, no queue — a client
-  that was not attached missed it, and the reply says so.
+  that was not attached missed it, and the reply says so. A subscription also counts as
+  use: a watched extension is not idle-reaped (an event-only peer is never "asked"
+  anything, so the window would otherwise remove exactly the peer somebody is listening
+  to), subscribing starts a lazy one, and the channel ending reaches subscribers as
+  `notifications/termcp/ext_state` instead of as silence.
 
 - **`--until` no longer matches a colourised echo of your own command.** A shell that
   highlights the typed line (PowerShell's PSReadLine, zsh syntax highlighting) puts SGR

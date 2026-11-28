@@ -7,7 +7,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/mcp"
 )
 
@@ -60,6 +62,10 @@ const (
 	extSubscribeMethod   = "termcp/subscribe"
 	extUnsubscribeMethod = "termcp/unsubscribe"
 	extListSubsMethod    = "termcp/subscriptions"
+	// extStateMethod is what a subscriber receives when the extension's channel ends —
+	// it has `state` and no `method`, so "the peer said something" and "the peer is gone"
+	// cannot be confused for one another.
+	extStateMethod = "notifications/termcp/ext_state"
 	// extSubWildcard subscribes to every extension, including ones created later —
 	// which is the shape a plugin wants: it starts before the peers do.
 	extSubWildcard = "*"
@@ -205,6 +211,15 @@ func (s *Server) handleExtSubscribe(ctx context.Context, raw json.RawMessage) (a
 		return nil, rpcErr
 	}
 	names := subNames(s.extEvents.subscribe(sess, name))
+	// AND THE PEER IS BROUGHT UP, because a subscription to an extension that is not
+	// running hears nothing and says nothing (see startWatchedExtension).
+	if name == extSubWildcard {
+		for _, known := range s.knownExtensionNames() {
+			go s.startWatchedExtension(known)
+		}
+	} else {
+		go s.startWatchedExtension(name)
+	}
 	// THE NOTE IS PART OF THE ANSWER, because the alternative to a replay is silence:
 	// a client that assumes it will receive what happened while it was away waits for
 	// events that will never come, which is the failure this whole area keeps producing.
@@ -291,6 +306,58 @@ func subNames(names []string) []string {
 	}
 	return names
 }
+
+// hasExtEventSubscribers reports whether anybody is watching this extension's events.
+//
+// IT IS THE RECONCILER'S "watched" PREDICATE (extensions.SetWatched), which is what keeps
+// a silent peer up: an event-only extension is never "used" in the sense the idle window
+// measures, so without this the window would reap it between two events and the
+// subscriber would simply stop hearing anything.
+func (s *Server) hasExtEventSubscribers(name string) bool {
+	return s.extEvents != nil && len(s.extEvents.targets(name)) > 0
+}
+
+// publishExtState tells subscribers that an extension's channel ended.
+//
+// A SEPARATE METHOD FROM THE EVENT, and a frame with `state` instead of `method`: a
+// subscriber that received "the peer is gone" as an ordinary notification of a method
+// the peer never sent would have to guess, which is the class of silence this whole area
+// exists to remove. The extension endpoint's own clients get the same news by having
+// their MCP session ended (closeExtSessions); this is the main endpoint's version.
+func (s *Server) publishExtState(ctx context.Context, extName, state string) {
+	if s.extEvents == nil || extName == "" {
+		return
+	}
+	for _, sub := range s.extEvents.targets(extName) {
+		body := map[string]any{"extension": extName, "state": state}
+		if err := sub.sess.Notify(ctx, extStateMethod, body); err != nil {
+			s.extEvents.dropped.Add(1)
+			continue
+		}
+		s.extEvents.delivered.Add(1)
+	}
+}
+
+// startWatchedExtension makes a subscribed extension exist.
+//
+// SUBSCRIBING IS ASKING FOR ITS EVENTS, so a lazy template that is not running has to be
+// started or the subscription is a promise nothing keeps — the peer would say nothing
+// because it is not there. It runs on its own goroutine and its failure is not the
+// subscriber's answer: the connect can take seconds (a dial, a process, a handshake) and
+// the reply to a subscribe must not wait for it. A peer that cannot come up is visible
+// where peers always are — `ls ext`, the extension endpoint, its retry state.
+func (s *Server) startWatchedExtension(name string) {
+	if s.extensions == nil || name == extSubWildcard || name == "" {
+		return
+	}
+	if st, ok := s.extensions.Status(name); !ok || st.Status == extensions.StatusAvailable {
+		return
+	}
+	_, _ = s.extensions.Acquire(name, extWatchStartWait)
+}
+
+// extWatchStartWait bounds the background start, not the subscribe reply.
+const extWatchStartWait = 20 * time.Second
 
 // knownExtensionNames lists the CONFIGURED names for a refusal, bounded so a big store
 // cannot turn one typo into a wall of text.

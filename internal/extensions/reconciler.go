@@ -62,6 +62,10 @@ type Reconciler struct {
 	// onChange is atomic so the callback fires without any lock held.
 	onChange atomic.Pointer[func()]
 
+	// watched answers "is somebody listening to this extension's events" (see
+	// SetWatched). Nil means nobody set one, and then the idle window is the whole rule.
+	watched func(name string) bool
+
 	syncs  chan string
 	revive chan struct{}
 
@@ -261,6 +265,22 @@ func (r *Reconciler) SSHConfigs() *sshconfig.Store { return r.sshConfigs }
 // SetOnChange subscribes to status transitions (the Web UI's panel and its push
 // frames). The callback fires after the state has been written, so a reader sees
 // what it is being told about.
+// SetWatched installs the "somebody is listening" predicate: a watched extension is
+// never reaped, however long it stays quiet.
+//
+// WHY THIS EXISTS. An idle window answers "does anybody still need this process" with
+// "nobody has asked recently", and asking means a request. An event-only peer breaks that
+// equation: its normal state IS silence, and the party that needs it never sends a
+// request — it waits to be told something. No keepalive counts as use either, so a
+// subscriber could watch a healthy peer and have it reaped between two events, with
+// nothing said to the subscriber.
+//
+// A predicate rather than a count, so the reconciler keeps knowing nothing about MCP
+// sessions: the layer that owns subscriptions decides what "watched" means.
+func (r *Reconciler) SetWatched(fn func(name string) bool) {
+	r.watched = fn
+}
+
 func (r *Reconciler) SetOnChange(fn func()) {
 	r.onChange.Store(&fn)
 }
