@@ -1,6 +1,8 @@
 package mcp
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -61,9 +63,23 @@ func TestRunShellKeepsStateAndClaimsNoExitCode(t *testing.T) {
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
 	awaitPtyReady(t, s, h)
 
-	termText(t, s, map[string]any{"run": "cd /tmp", "shell": h, "timeout": 10})
+	// A DIRECTORY THE TEST OWNS, WITH ITS BASENAME FOR THE ASSERTION. `/tmp` is not
+	// the same place on every platform (PowerShell resolves it to `D:\tmp` or
+	// `C:\tmp`), so the old spelling compared a POSIX path against a Windows answer and
+	// failed on a machine where the feature worked. A basename is spelling-stable where the
+	// path is not: a short 8.3 form and its long form share it, which is what makes this
+	// hold on the Windows runner too.
+	dir := filepath.Join(t.TempDir(), "run-shortcut-state")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// SLASHES, NOT THE PLATFORM SEPARATOR: the line is handed to a shell verbatim, and a
+	// backslash inside double quotes is an escape to bash. PowerShell accepts `/`.
+	quoted := `"` + filepath.ToSlash(dir) + `"`
+
+	termText(t, s, map[string]any{"run": "cd " + quoted, "shell": h, "timeout": 10})
 	got := termText(t, s, map[string]any{"run": "pwd", "shell": h, "timeout": 10})
-	if !strings.Contains(got, "/tmp") {
+	if !strings.Contains(got, "run-shortcut-state") {
 		t.Fatalf("the second line did not run in the shell the first one changed:\n%s", got)
 	}
 	// A TERMINAL NEVER REPORTS THAT A COMMAND INSIDE IT FINISHED, so claiming an exit code

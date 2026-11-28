@@ -314,6 +314,29 @@ func (r *Repository) currentRef(name string) (catalogRef, error) {
 			return ref, nil
 		}
 	}
+	// THE CASE-INSENSITIVE FALLBACK IS STILL ONE DIRECTORY.
+	//
+	// It used to load every host (discoverRefs) to answer "what is BETA really called",
+	// which cost the whole tree for one name and — worse — inherited every other host's
+	// problems: a single host with two committed generations made reading an unrelated
+	// name fail, depending on nothing but directory order. One ReadDir finds the spelling;
+	// one directory is then read, exactly like the exact-name path.
+	if st := r.snap(); st.keyring != nil {
+		if real, ok := r.foldedHostName(name); ok {
+			ref, found, err := r.scanHostDir(real, st.keyring.StoreID())
+			if err != nil {
+				return catalogRef{}, err
+			}
+			if found {
+				stored, keyErr := r.readKeyringFile()
+				if keyErr != nil && !errors.Is(keyErr, ErrNotInitialized) {
+					return catalogRef{}, keyErr
+				}
+				ref.activated = r.generationActivated(ref, stored)
+				return ref, nil
+			}
+		}
+	}
 	if err := r.loadRefs(); err != nil {
 		return catalogRef{}, err
 	}
@@ -322,6 +345,33 @@ func (r *Repository) currentRef(name string) (catalogRef, error) {
 		return catalogRef{}, fmt.Errorf("%q: %w", name, ErrNotFound)
 	}
 	return ref, nil
+}
+
+// foldedHostName resolves a name to the directory whose spelling differs only in case.
+//
+// ONE READDIR, NO HOST IS OPENED: resolving a spelling is not a reason to read everybody's
+// ciphertext, and a host that cannot be read is not an obstacle to finding this one. A
+// collision (two directories whose names fold to the same string) is refused rather than
+// picked from, which is the same rule discoverRefs applies to the whole tree.
+func (r *Repository) foldedHostName(name string) (string, bool) {
+	entries, err := os.ReadDir(hostsRoot(r.dataDir))
+	if err != nil {
+		return "", false
+	}
+	var match string
+	for _, entry := range entries {
+		if !entry.IsDir() || validateCatalogName(entry.Name()) != nil {
+			continue
+		}
+		if !strings.EqualFold(entry.Name(), name) {
+			continue
+		}
+		if match != "" && match != entry.Name() {
+			return "", false // ambiguous: two spellings, neither is "the" answer
+		}
+		match = entry.Name()
+	}
+	return match, match != ""
 }
 
 // Save creates a profile or commits a new generation under the existing stable
