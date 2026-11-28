@@ -393,7 +393,7 @@ func (r *Reconciler) reapDue(name string, st *extState, limit time.Duration) int
 	// A WATCHED EXTENSION IS IN USE even though nobody has asked it anything (SetWatched).
 	// This is the one seam the timer and the walk both pass through, so the rule cannot
 	// hold on one road and not the other.
-	if r.watched != nil && r.watched(name) {
+	if fn := r.watched.Load(); fn != nil && (*fn)(name) {
 		return 0
 	}
 	reason := "idle for " + limit.Round(time.Second).String() + " with nothing asked of it"

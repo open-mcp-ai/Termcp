@@ -64,7 +64,12 @@ type Reconciler struct {
 
 	// watched answers "is somebody listening to this extension's events" (see
 	// SetWatched). Nil means nobody set one, and then the idle window is the whole rule.
-	watched func(name string) bool
+	//
+	// AN ATOMIC POINTER, NOT A FIELD: SetWatched is called once at wiring time from the
+	// wiring goroutine, and the predicate is called from the timer and from the walk —
+	// different goroutines, no lock between them, which is exactly the shape that made the
+	// race detector speak. Published as a whole value, like onChange below.
+	watched atomic.Pointer[func(name string) bool]
 
 	syncs  chan string
 	revive chan struct{}
@@ -278,7 +283,11 @@ func (r *Reconciler) SSHConfigs() *sshconfig.Store { return r.sshConfigs }
 // A predicate rather than a count, so the reconciler keeps knowing nothing about MCP
 // sessions: the layer that owns subscriptions decides what "watched" means.
 func (r *Reconciler) SetWatched(fn func(name string) bool) {
-	r.watched = fn
+	if fn == nil {
+		r.watched.Store(nil)
+		return
+	}
+	r.watched.Store(&fn)
 }
 
 func (r *Reconciler) SetOnChange(fn func()) {
