@@ -14,8 +14,18 @@ import (
 // the reconciler published, and a channel that died a moment ago still reads `available`
 // until a walk notices. A caller that has to decide "is this process there" cannot get
 // that from a belief, so the reply carries a probe taken at reply time.
+// seed builds a state whose snapshot is the record fn describes. extState keeps its
+// fields in one atomic snapshot now (state.go), so a struct literal cannot name them.
+func seed(fn func(*extStateData)) *extState {
+	st := &extState{}
+	st.update(fn)
+	return st
+}
+
 func TestLivenessMeasuresRatherThanRepeatsTheStatus(t *testing.T) {
-	state := &extState{status: StatusAvailable, shellID: "shell-1", sessionID: "sess-1"}
+	state := seed(func(d *extStateData) {
+		d.status, d.shellID, d.sessionID = StatusAvailable, "shell-1", "sess-1"
+	})
 
 	// A LIVE CHANNEL.
 	got := state.probeLiveness(
@@ -36,12 +46,10 @@ func TestLivenessMeasuresRatherThanRepeatsTheStatus(t *testing.T) {
 // Both end up with no shell id, and reporting the second about the first is the same
 // silence this field exists to remove — worse, it hides the exit code that says why.
 func TestAClosedChannelSaysSoInsteadOfDenyingItEverExisted(t *testing.T) {
-	state := &extState{
-		status:          StatusUnavailable,
-		closedShellID:   "shell-gone",
-		closedReason:    "exit code 7",
-		closedSessionID: "sess-1",
-	}
+	state := seed(func(d *extStateData) {
+		d.status = StatusUnavailable
+		d.closedShellID, d.closedReason, d.closedSessionID = "shell-gone", "exit code 7", "sess-1"
+	})
 	got := state.probeLiveness(
 		func(string) *session.ChildShell { return nil },
 		func(string) string { return "running" })
@@ -54,7 +62,7 @@ func TestAClosedChannelSaysSoInsteadOfDenyingItEverExisted(t *testing.T) {
 
 	// A read-only template, by contrast, really has no process — and that is a
 	// different sentence, because it is a different fact.
-	bare := &extState{status: StatusAvailable, sessionID: "sess-1"}
+	bare := seed(func(d *extStateData) { d.status, d.sessionID = StatusAvailable, "sess-1" })
 	got = bare.probeLiveness(
 		func(string) *session.ChildShell { return nil },
 		func(string) string { return "running" })
@@ -72,7 +80,7 @@ func TestAClosedChannelSaysSoInsteadOfDenyingItEverExisted(t *testing.T) {
 // be this daemon's own — a value a caller can check and find wrong. The honest answer is
 // the reason, beside the fact the caller actually wanted (`alive`).
 func TestThePidIsReportedAsUnknownWithAReason(t *testing.T) {
-	state := &extState{status: StatusAvailable, shellID: "shell-1"}
+	state := seed(func(d *extStateData) { d.status, d.shellID = StatusAvailable, "shell-1" })
 	got := state.probeLiveness(
 		func(string) *session.ChildShell { return nil },
 		func(string) string { return "running" })
@@ -90,7 +98,7 @@ func TestThePidIsReportedAsUnknownWithAReason(t *testing.T) {
 // read as a flapping target, which is the opposite of what it is for. The transition is
 // what counts: down, then available again.
 func TestRestartsCountsOnlyRecoveries(t *testing.T) {
-	state := &extState{status: StatusAvailable}
+	state := seed(func(d *extStateData) { d.status = StatusAvailable })
 
 	state.mark(StatusAvailable) // already up: not a restart
 	if got := state.snapshot().Restarts; got != 0 {
@@ -114,7 +122,7 @@ func TestRestartsCountsOnlyRecoveries(t *testing.T) {
 // LAST-USE IS A FACT ABOUT THE CALLER, NOT ABOUT THE EXTENSION'S HEALTH: it is reported
 // for every extension, not only the lazy ones whose idle timer needed it.
 func TestLastActiveIsReportedForEveryExtension(t *testing.T) {
-	state := &extState{status: StatusAvailable}
+	state := seed(func(d *extStateData) { d.status = StatusAvailable })
 	before := time.Now().Add(-time.Second).UnixMilli()
 	state.touch()
 	snap := state.snapshot()

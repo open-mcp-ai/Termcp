@@ -3,7 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"sync"
+	"sync/atomic"
 )
 
 // PROGRESS: notifications/progress, and the _meta.progressToken that asks for them.
@@ -44,12 +44,17 @@ type ProgressFrame struct {
 
 // progressSink is what a transport installs so a handler can report.
 type progressSink struct {
-	mu    sync.Mutex
 	token json.RawMessage
 	send  func(ProgressFrame)
-	// last is the highest progress reported, because the specification forbids a
-	// decrease: a handler that reports out of order (two goroutines, one slow) would
-	// otherwise produce a stream a client is entitled to treat as a protocol error.
+	// state is the monotonic watermark, published as a whole value: `last` and `sent`
+	// are one fact ("how far has this call got"), and splitting them across a lock
+	// would be a lock held across the send below, which reaches the transport.
+	state atomic.Pointer[progressMark]
+}
+
+// progressMark is the watermark: the highest progress reported so far, and whether
+// anything has been reported at all.
+type progressMark struct {
 	last float64
 	sent bool
 }
@@ -65,15 +70,23 @@ func ReportProgress(ctx context.Context, progress float64, total *float64, messa
 	if !ok || sink == nil {
 		return false
 	}
-	sink.mu.Lock()
-	if sink.sent && progress < sink.last {
-		progress = sink.last
+	// THE SPECIFICATION FORBIDS A DECREASE: a handler reporting out of order (two
+	// goroutines, one slow) would otherwise produce a stream a client is entitled to
+	// treat as a protocol error. So the watermark only ever rises, and the compare-and-
+	// swap loop is what makes "read the last value, publish a higher one" atomic.
+	for {
+		cur := sink.state.Load()
+		next := &progressMark{last: progress, sent: true}
+		if cur != nil && cur.sent && progress < cur.last {
+			next.last = cur.last
+		}
+		if sink.state.CompareAndSwap(cur, next) {
+			progress = next.last
+			break
+		}
 	}
-	sink.last = progress
-	sink.sent = true
 	token := sink.token
 	send := sink.send
-	sink.mu.Unlock()
 	if send == nil {
 		return false
 	}
