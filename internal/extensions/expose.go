@@ -52,14 +52,15 @@ func (r *Reconciler) ensureExposes(ext *Extension, st *extState) error {
 	if r.forwardMgr == nil || r.exposeHandler == nil {
 		return errors.New("this instance cannot expose an HTTP surface: it was started without one (embedders that build their own listener must call SetExposeHandler)")
 	}
-	st.mu.Lock()
-	if st.sessionID == "" {
-		st.mu.Unlock()
+	// ONE SNAPSHOT FOR BOTH READINGS: the session and the exposes it holds describe
+	// the same instant, which is what the atomic snapshot exists for (issue #282's
+	// shape, applied to state rather than to a peer).
+	snap := st.load()
+	if snap.sessionID == "" {
 		return errors.New("no session to attach exposes to")
 	}
-	sessID := st.sessionID
-	existing := append([]ForwardStatus(nil), st.exposes...)
-	st.mu.Unlock()
+	sessID := snap.sessionID
+	existing := snap.exposes
 
 	live := map[string]bool{}
 	for _, fw := range r.forwardMgr.ListBySession(sessID) {
@@ -85,9 +86,8 @@ func (r *Reconciler) ensureExposes(ext *Extension, st *extState) error {
 		handler := Whitelist(ex.Paths, base)
 		fw, err := r.forwardMgr.CreateRemoteHTTP(sessID, info.Name, ex.RemoteHost, ex.RemotePort, handler, sshCli)
 		if err != nil {
-			st.mu.Lock()
-			st.exposes = append([]ForwardStatus(nil), built...)
-			st.mu.Unlock()
+			snapshot := append([]ForwardStatus(nil), built...)
+			st.update(func(d *extStateData) { d.exposes = snapshot })
 			return fmt.Errorf("http expose on %s: %w", exposeSpec(ex), err)
 		}
 		sess.AttachCleanup(func() { r.forwardMgr.Close(fw.ForwardID) })
@@ -99,9 +99,10 @@ func (r *Reconciler) ensureExposes(ext *Extension, st *extState) error {
 		}
 	}
 
-	st.mu.Lock()
-	st.exposes = built
-	st.mu.Unlock()
+	// COPY ON PUBLISH, like every other slice in the snapshot: a reader holding a
+	// previous snapshot must never see this one mutate underneath it.
+	published := built
+	st.update(func(d *extStateData) { d.exposes = published })
 	return nil
 }
 
@@ -122,7 +123,5 @@ func exposeSpec(x ExposeDecl) string {
 // exposeStatuses reports what this extension published, for the state the UI and the
 // agent read.
 func (st *extState) exposeStatuses() []ForwardStatus {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return append([]ForwardStatus(nil), st.exposes...)
+	return st.load().exposes
 }

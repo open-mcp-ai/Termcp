@@ -41,12 +41,19 @@ import (
 // refusal is rendered from the capability table rather than from a string a
 // handler happened to spell.
 func restRefuseTool(w http.ResponseWriter, sess *session.Session, capID string) bool {
+	return restRefuseToolOn(w, sess, capID, "")
+}
+
+// restRefuseToolOn is restRefuseTool naming the extension whose template would have to
+// change, when the caller knows it (issue #323). The REST surface answers the same
+// question as the MCP guard, so it renders the same sentence.
+func restRefuseToolOn(w http.ResponseWriter, sess *session.Session, capID, extName string) bool {
 	if sess == nil || sess.Restriction().Allows(capID) {
 		return false
 	}
 	writeJSON(w, http.StatusForbidden, map[string]any{
 		"error_code": "forbidden",
-		"error":      session.ForbiddenTool(capability.ToolForID(capID)),
+		"error":      session.ForbiddenToolOn(capability.ToolForID(capID), extName, capID),
 	})
 	return true
 }
@@ -108,6 +115,11 @@ func (h *Handler) sessionOwning(sessionID, shellID string) *session.Session {
 // set and let the empty ones fall out. As on the MCP side, reading is as gated as
 // writing: the whitelist is about reachability, not direction.
 func restRefusePaths(w http.ResponseWriter, sess *session.Session, paths ...[2]string) bool {
+	return restRefusePathsOn(w, sess, "", paths...)
+}
+
+// restRefusePathsOn is restRefusePaths naming the extension (issue #323).
+func restRefusePathsOn(w http.ResponseWriter, sess *session.Session, extName string, paths ...[2]string) bool {
 	if sess == nil {
 		return false
 	}
@@ -119,7 +131,7 @@ func restRefusePaths(w http.ResponseWriter, sess *session.Session, paths ...[2]s
 		if !r.AllowsPath(p[1]) {
 			writeJSON(w, http.StatusForbidden, map[string]any{
 				"error_code": "forbidden",
-				"error":      session.ForbiddenPath(p[0], p[1]),
+				"error":      session.ForbiddenPathOn(p[0], p[1], extName),
 			})
 			return true
 		}

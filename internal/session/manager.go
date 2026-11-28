@@ -25,45 +25,39 @@ import (
 
 // Manager is a thread-safe registry of sessions with persistence.
 type Manager struct {
-	// approvalMu guards approvalListeners, which fan approval transitions out to
-	// every interested subsystem (the web UI hub, the notify wake-up).
+	// approvalListeners fan approval transitions out to every interested
+	// subsystem (the web UI hub, the notify wake-up).
 	//
-	// It is a list rather than a single slot because the subscribers are
-	// independent: main installs the agent wake-up and the web UI installs its
-	// push, and neither is a replacement for the other. A single slot silently
-	// dropped one of them.
-	approvalMu        sync.Mutex
-	approvalListeners []func(sessionID string, req approval.Request)
+	// A LIST RATHER THAN A SLOT, because the subscribers are independent: main
+	// installs the agent wake-up and the web UI installs its push, and neither
+	// replaces the other. A single slot silently dropped one of them.
+	//
+	// THE LIST IS IMMUTABLE ONCE PUBLISHED. Add copies it and swaps the pointer;
+	// notify reads it once. An append-only subscriber list published as an atomic
+	// pointer is the copy-on-write shape: adding is rare and never rewrites what a
+	// broadcast is iterating, so no lock has to be held while callbacks run.
+	approvalListeners atomic.Pointer[[]func(sessionID string, req approval.Request)]
 
-	// activityMu guards activityListeners, which report that a shell received
-	// input and from where. A browser keystroke is known to the tab that sent it,
-	// but input an agent sends over MCP happens entirely server-side, so without
-	// this signal a channel driven by MCP would never show it.
+	// activityListeners report that a shell received input and from where. A
+	// browser keystroke is known to the tab that sent it, but input an agent sends
+	// over MCP happens entirely server-side, so without this signal a channel
+	// driven by MCP would never show it.
 	//
-	// A list for the same reason as approvalListeners: subscribers are
-	// independent and one must not displace another.
-	activityMu        sync.Mutex
-	activityListeners []func(shellID string, src InputSource, submit bool)
+	// Same shape and same reason as approvalListeners above.
+	activityListeners atomic.Pointer[[]func(shellID string, src InputSource, submit bool)]
 
-	// persistMu serialises persistOne, because taking a snapshot and writing it are
-	// ONE operation and the code is not shaped like it.
+	// persistTokens gives each session a ONE-SLOT CHANNEL TOKEN to serialize its
+	// own persistOne (see AGENTS.md rule 4: "可取消的串行化用一槽 channel 令牌").
 	//
-	// persistOne reads the session at the top and writes it at the bottom, with the
-	// shell manifests (an fsync each, ~7ms) in between. Without this lock two persists
-	// race, and the loser is the NEWER state: a persist that started before a session
-	// died can finish after the one that recorded why it died, putting the older
-	// manifest back on disk with the reason gone — which is precisely the fact issue
-	// #176 exists to keep.
+	// PER SESSION, NOT A MANAGER MUTEX. An fsync takes ~7ms, and on a slow disk a
+	// rename takes tens of milliseconds; a single manager-wide mutex made session A's
+	// write block every unrelated session B from persisting or renaming.
 	//
-	// Seen as `TestWhyASessionDiedIsRecordedAndSurvivesARestart` failing on CI with the
-	// reason live in memory and empty on disk, and reproduced locally at -cpu=1. It is
-	// not a test-only race: `get` after a restart is where a user asks why their session
-	// disappeared, and the answer was being overwritten.
-	//
-	// Per manager rather than per session: the store already takes one lock per manifest
-	// write, so the fsync order is unchanged, and a map of per-session locks would be
-	// state to keep correct for no measured gain.
-	persistMu sync.Mutex
+	// The channel token is self-contained: the token is in the channel when free,
+	// acquired with <-tok, returned with tok <- struct{}{}. No mutex is held across
+	// disk I/O, and independent sessions write concurrently without queuing behind
+	// each other.
+	persistTokens sync.Map // sessionID string -> chan struct{}
 
 	// persistHook, when set, runs inside persistOne between taking the snapshot and
 	// writing it — the window the lock above closes. Nil in production; a test uses it to
@@ -88,12 +82,14 @@ type Manager struct {
 	// duration of one operation.
 	transports *sshclient.TransportPool
 
-	listChangeMu sync.RWMutex
-	onListChange func()
-	onOutputHook func(shellID string)
-	onExitHook   func(shellID string, exitCode *int)
-	onCloseHook  func(shellID string)
-	onDeadHooks  []func(sessionID string)
+	// THE HOOKS ARE ATOMIC POINTERS, NOT A LOCKED GROUP. Each notifier reads exactly
+	// one of them; the dead hooks are an additive list, so they use the same
+	// copy-on-write append as the activity listeners. Nothing here is a transaction.
+	onListChange atomic.Pointer[func()]
+	onOutputHook atomic.Pointer[func(shellID string)]
+	onExitHook   atomic.Pointer[func(shellID string, exitCode *int)]
+	onCloseHook  atomic.Pointer[func(shellID string)]
+	onDeadHooks  atomic.Pointer[[]func(sessionID string)]
 }
 
 // NewManager creates a Manager. internalSSH must be the built-in sshserver.Server (after Start) when using internal profiles; may be nil if only remote sessions are used in tests.
@@ -331,10 +327,10 @@ func (m *Manager) Rename(id, name string) error {
 	if s == nil {
 		return fmt.Errorf("session %q not found", id)
 	}
-	s.mu.Lock()
-	s.Name = name
-	s.UpdatedAt = clock.Now()
-	s.mu.Unlock()
+	s.updateLive(func(st *liveMeta) {
+		st.name = name
+		st.updatedAt = clock.Now()
+	})
 	m.persistOne(id)
 	m.notifyListChange()
 	return nil
@@ -351,16 +347,15 @@ func (m *Manager) RenameSSHConfig(fromName, toName string) {
 	}
 	m.sessions.Range(func(_, v any) bool {
 		s := v.(*Session)
-		// Lock, rewrite, unlock, then persist: persistOne reads the session back
-		// through Info(), so it cannot run under the write lock.
-		s.mu.Lock()
-		if s.SSHConfig != fromName {
-			s.mu.Unlock()
-			return true
-		}
-		s.SSHConfig = toName
-		s.UpdatedAt = clock.Now()
-		s.mu.Unlock()
+		// Rewrite, then persist: persistOne reads the session back through Info(),
+		// so the record must be complete before it runs.
+		s.updateLive(func(st *liveMeta) {
+			if st.sshConfig != fromName {
+				return
+			}
+			st.sshConfig = toName
+			st.updatedAt = clock.Now()
+		})
 		m.persistOne(s.ID)
 		return true
 	})
@@ -387,9 +382,7 @@ func (m *Manager) EnableApprovalScoped(id string, need int, timeout time.Duratio
 	if err := s.EnableApprovalScoped(need, timeout, scopes); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.UpdatedAt = clock.Now()
-	s.mu.Unlock()
+	s.touch()
 	m.persistOne(id)
 	m.notifyListChange()
 	return nil
@@ -403,9 +396,7 @@ func (m *Manager) DisableApproval(id string) error {
 		return fmt.Errorf("session %q not found", id)
 	}
 	s.DisableApproval()
-	s.mu.Lock()
-	s.UpdatedAt = clock.Now()
-	s.mu.Unlock()
+	s.touch()
 	m.persistOne(id)
 	m.notifyListChange()
 	return nil
@@ -509,43 +500,37 @@ func (m *Manager) MarkAllDead() {
 // per manifest, so rewriting ten unchanged sessions to record one rename cost ten
 // fsyncs and ~65ms. The previous code did exactly that at nine call sites, all but
 // one of which change a single session.
+func (m *Manager) persistToken(id string) chan struct{} {
+	if v, ok := m.persistTokens.Load(id); ok {
+		return v.(chan struct{})
+	}
+	ch := make(chan struct{}, 1)
+	ch <- struct{}{}
+	actual, _ := m.persistTokens.LoadOrStore(id, ch)
+	return actual.(chan struct{})
+}
+
 func (m *Manager) persistOne(id string) {
-	if m.store == nil {
+	if m.store == nil || id == "" {
 		return
 	}
-	m.persistMu.Lock()
-	defer m.persistMu.Unlock()
+	tok := m.persistToken(id)
+	<-tok
+	defer func() { tok <- struct{}{} }()
+
 	s := m.Get(id)
 	if s == nil {
 		return
 	}
 	sess := s.Info()
+	shells := s.SnapshotShells()
+
 	if hook := m.persistHook.Load(); hook != nil {
 		(*hook)()
 	}
-	// A manifest that fails to write is state the caller believes is durable, so it
-	// is logged rather than discarded. This is not hypothetical: on Windows the
-	// rename can be refused while a reader holds the old manifest open, and when
-	// that happened here the shell's exit status stayed "running" on disk forever
-	// even though the session's own manifest was rewritten - the restart then
-	// resurrected a finished shell as a live one. (The store now retries that one
-	// transient failure; this log is what makes any remaining failure visible.)
-	// Write what the snapshot holds, and REMOVE what it no longer holds.
-	//
-	// Saving alone was not a sync: SaveShell writes one shell's manifest and never
-	// removes one, so a shell dropped from shellHistory stayed on disk forever. The
-	// in-memory view looked right while DELETE had actually left the record behind,
-	// and a restart would read the orphan back into the session. That is the same
-	// class of bug as the close paths themselves — the record outliving the decision
-	// to destroy it — so the reconcile belongs here, where "make disk match memory"
-	// is the stated job.
-	//
-	// `live` is the set the snapshot just produced; anything in the shell directory
-	// outside it is a removed channel. DeleteShell drops the manifest AND the logs,
-	// which is what DELETE means; an archived shell is still in the snapshot, so it is
-	// in `live` and survives untouched.
-	live := make(map[string]bool)
-	for _, sh := range s.SnapshotShells() {
+
+	live := make(map[string]bool, len(shells))
+	for _, sh := range shells {
 		live[sh.ID] = true
 		if err := m.store.SaveShell(id, sh); err != nil {
 			slog.Error("shell manifest write failed", "session_id", id, "shell_id", sh.ID, "status", sh.Status, "err", err)
@@ -566,15 +551,6 @@ func (m *Manager) persistOne(id string) {
 		slog.Error("session manifest write failed", "session_id", id, "err", err)
 	}
 }
-
-// persist writes every session's manifest. Use persistOne for a single session;
-// this exists for the operations that genuinely change the whole table
-// (MarkAllDead, RestoreDead) and for callers holding a snapshot written before
-// their change.
-//
-// The slice argument is the pre-change snapshot some callers already have; it is
-// used only to know which ids to refresh, and each id's content is read fresh, so
-// a stale entry in the snapshot cannot publish stale state.
 func (m *Manager) persist(sessions ...[]api.Session) {
 	if m.store == nil {
 		return
@@ -623,6 +599,14 @@ func (m *Manager) RestoreDead() error {
 	if err != nil {
 		return err
 	}
+	/* Only the records this restore actually corrected are written back. The loop
+	   below turns a "running" record into EXITED — the process that claimed to hold
+	   an SSH connection is gone, so nothing else can be true — and that correction is
+	   the only thing restore has to say to disk. Persisting the whole list rewrote
+	   every archived manifest and every shell beneath it, with an fsync each, to
+	   change nothing: 2000 archived sessions cost 19 s of background I/O that the
+	   next restart repeated. */
+	corrected := make([]api.Session, 0)
 	for _, meta := range list {
 		if _, ok := m.sessions.Load(meta.ID); ok {
 			continue
@@ -631,6 +615,7 @@ func (m *Manager) RestoreDead() error {
 		// "running" is really DEAD; never advertise a fake live tile.
 		if meta.Status == api.SessionRunning {
 			meta.Status = api.SessionExited
+			corrected = append(corrected, meta)
 		}
 		s := &Session{Session: meta, scope: newResourceScope()}
 		// Restored sessions never start a process, but they can still be deleted;
@@ -654,11 +639,13 @@ func (m *Manager) RestoreDead() error {
 		// restored session has no live shells, but its retained ones still answer
 		// termcp://#<session>:N, and a new channel opened on it must take a fresh N
 		// rather than colliding with a retained one.
-		s.nextShellIndex = maxShellIndex(meta.Shells)
+		s.nextShellIndex.Store(int64(maxShellIndex(meta.Shells)))
 		m.sessions.Store(meta.ID, s)
 		m.slogf("restored DEAD session", meta.ID)
 	}
-	m.persist(m.ListAll())
+	if len(corrected) > 0 {
+		m.persist(corrected)
+	}
 	m.notifyListChange()
 	return nil
 }
@@ -701,3 +688,60 @@ func backfillShellIndexes(shells []api.Session) {
 		shells[i].Index = i + 1
 	}
 }
+
+// Resolve turns whatever a caller wrote for a session into the session it names
+// (issue #320): the full id, the display name it was created with, or an id prefix that
+// matches exactly one session.
+//
+// IT LIVES HERE, NOT IN THE CALLER, because three entrances need the same three rules:
+// the tool handlers, the transcript reader (`run web:1`), and the listing (`ls web`).
+// Each had learned a different subset — `read web:1` worked, `run web:1` answered
+// `session "web" not found`, `ls web` listed nothing — and a spelling that works in one
+// verb and not the next is indistinguishable from a session that disappeared.
+//
+// The answers are (session, nil) for one match, (nil, nil) for none, and
+// (nil, candidates) for several: the caller has its own sentence for "not found", and an
+// ambiguous prefix is the caller's chance to list the choices.
+func (m *Manager) Resolve(ref string) (*Session, []*Session) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return nil, nil
+	}
+	if sess := m.Get(ref); sess != nil {
+		return sess, nil
+	}
+	// BY NAME BEFORE BY PREFIX: a name is a word the caller chose, and it should not lose
+	// to an id that happens to start with the same characters.
+	if named := m.SessionsNamed(ref); len(named) == 1 {
+		return named[0], nil
+	} else if len(named) > 1 {
+		return nil, named
+	}
+	if len(ref) < minRefPrefix || len(ref) >= idLength {
+		return nil, nil
+	}
+	var matches []*Session
+	m.sessions.Range(func(_, v any) bool {
+		sess := v.(*Session)
+		if strings.HasPrefix(sess.ID, ref) {
+			matches = append(matches, sess)
+		}
+		return true
+	})
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches[0], nil
+	}
+	return nil, matches
+}
+
+const (
+	// minRefPrefix is the shortest id prefix that resolves. Four characters name ~17 bits
+	// of an id: long enough that a reader copying from a narrow `ps` column or a log line
+	// means one session, short enough to be worth typing.
+	minRefPrefix = 4
+	// idLength is how long a full id is; a string that long is not a prefix.
+	idLength = 12
+)

@@ -2,6 +2,526 @@
 
 ## Unreleased
 
+## v0.2.10-rc.3 — 2026-11-28
+
+- **The instance's own MCP endpoint can subscribe to extension events.** A peer that
+  speaks on its own (`notifications/<its own name>/<event>`) used to reach only a client
+  attached to `/ext/{name}/stream`, so watching several extensions meant holding one MCP
+  session per extension. `termcp/subscribe` (`{"ext":"name"}` or `{"ext":"*"}`) now
+  delivers them on the main endpoint as `notifications/termcp/ext`, wrapped with the
+  extension's name so a subscriber knows who spoke; `termcp/subscriptions` reads the set
+  back with `delivered` / `dropped` counters, and a name that is not an extension is
+  refused with the ones that are. Delivery is from-now-on: no replay, no queue — a client
+  that was not attached missed it, and the reply says so. A subscription also counts as
+  use: a watched extension is not idle-reaped (an event-only peer is never "asked"
+  anything, so the window would otherwise remove exactly the peer somebody is listening
+  to — a client holding an open `GET` stream on `/ext/{name}/stream` counts as watching
+  too, not just a subscription), subscribing starts a lazy one, and the channel ending reaches subscribers as
+  `notifications/termcp/ext_state` instead of as silence.
+
+- **`--until` no longer matches a colourised echo of your own command.** A shell that
+  highlights the typed line (PowerShell's PSReadLine, zsh syntax highlighting) puts SGR
+  sequences *between* the words, so the echo never appeared as one contiguous substring:
+  the byte search found nothing, the echo stayed in the window, and `--until` answered
+  `Completion: matched` a fraction of a second after typing, before the command had run.
+  The echo is now recognised line by line with the colour removed for the comparison
+  only, which also covers ConPTY repainting the line on a later poll.
+
+- **`args` also takes an object, so a frame does not have to be written into the command
+  line.** The list form is unchanged (positional `$1`, `$2`, …); the object form is named
+  (`$NAME`), inserted by the same rule in both: a string verbatim, every other JSON value
+  as its compact JSON text — so `call s1:0 cdp:1 $FRAME` with
+  `args: {"FRAME": {"method":"Page.navigate","params":{…}}}` carries the frame as the
+  object it is, instead of as a quoted string inside `cmd`. A digit-only key is refused
+  (`$1` is positional, so the entry would name something no reference reaches), and one
+  name may appear in `args`, `vars` or `secrets` but never twice.
+
+- **An extension's endpoint now ends its client's session when the extension does.**
+  `/ext/{name}/stream` is the shape a subscriber waits on, and the peer behind it is a
+  process: when it exits, when its channel is closed, or when the idle sweep reaps the
+  extension, the publisher is gone and every attached client kept a `GET` stream that
+  could never carry another frame. Nothing about that death reached the stream — the
+  keep-alive kept it warm, so a quiet subscription and a dead one were the same bytes.
+  A closed session now wakes its stream (and the pump recognises a peer whose pipe
+  closed, which used to spin the reader and never conclude the channel had ended), so
+  the client sees the stream end and its next request answered `404`: initialize again,
+  which restarts the extension and re-subscribes.
+- **The host menu speaks the page's language.** Four batch-menu entries (lock,
+  unlock, activate, deactivate) are built by a module rather than authored in
+  `index.html`, so they were inserted after the translation engine's first pass over
+  the document and kept the English fallback written beside their keys — on a Chinese
+  page. They were translated only when a theme's resource fetch happened to re-apply
+  the catalog afterwards, which is a race: a cached theme resolved before the markup
+  existed and left them English, a cold one resolved after and did not. The catalog
+  is now applied once more when the document finishes parsing, so a string a module
+  builds no longer depends on which fetch won.
+- **Ticking a host now points at the batch key.** In select mode the key that acts on
+  the selection sits at the right end of the toolbar while the eye is on the card
+  just ticked, so nothing said where to go next. Every tick flashes that plate once
+  — accent border and glyphs, a ring expanding out of it — and the flash is disabled
+  under `prefers-reduced-motion`, where the lit card and the count already carry the
+  same news.
+- **One verb for taking a host out of here.** *Export Config* and *Share selected
+  host* were two menu items for one intention: the same profile document leaves the
+  machine either way, and only "who may open it" differs. The batch menu now carries
+  one *Export or share*, and the dialog asks that question once — a plain TOML file,
+  that file sealed with a passphrase, or one profile sealed to the other person's
+  public key as text to paste into any chat. The passphrase answer was already
+  implemented on the server (`X-Termcp-Password`) with no UI at all, and the import
+  dialog could not supply one, so a sealed `.enc` file downloaded from the page could
+  not be opened again from the page; both ends speak it now.
+
+## v0.2.10-rc.2 — 2026-11-28
+
+- **A key must have a name.** An empty label used to be legal and the list rendered
+  it as the key's short hash — a row whose only distinguishing feature was a
+  hexadecimal prefix, in a list whose whole job is telling keys apart. Create and
+  rename now answer `400 key_label_invalid` for an empty or whitespace-only name, and
+  a nameless key cannot be created by the panel, the REST route or an agent. The one
+  key that is named without being asked is the one a store is born with, which is
+  called `default` and renames like any other.
+- **The instance serves before it finishes reading yesterday.** Restoring the session
+  registry — one manifest read and one fsync per archived session — used to run while
+  constructing the server, so a data dir with a few dozen sessions kept the port
+  closed for seconds and an MCP client whose handshake times out in 8 s reported
+  "0 tools" against an instance that was only still loading. The socket is now bound
+  first and the history is restored behind it; `GET /api/daemon` publishes
+  `"restoring": true` while that is in progress, so "not up yet" and "up, still
+  loading" are distinguishable without watching a clock (#353).
+- Restoring yesterday's sessions writes back only the records it corrected. It used
+  to persist the whole list — every archived manifest and every shell under it, one
+  fsync each — to change nothing: 2000 archived sessions cost 19 s of background I/O
+  on every start, now 0.5 s. A record that still says "running" is the one thing a
+  restart has to report to disk, and those are the only ones written.
+- **Listing hosts no longer rescans the store per host.** Two helpers answered a
+  per-host question by reading everything: the storage-mode lookup re-read the whole
+  `ssh_configs/` directory to match a name's spelling, and loading a profile asked the
+  catalog listing after the profile's own directory had already answered. On Windows,
+  where one directory read costs ~150 µs and one file read ~100 µs, that turned a list
+  of 1000 hosts into 2.4 s; it is 0.3 s now, and the storage mode arrives with the load
+  instead of being re-derived afterwards. The exact-name lookup comes first and the
+  case-insensitive scan only runs when there is no directory to look at.
+- Opening a data dir no longer reads the host catalog, and listing hosts is no
+  longer quadratic: one name is resolved by reading that name's directory instead of
+  rescanning all of them. 245 encrypted hosts: 143 s → 0.6 s to start, 138 s → 0.6 s
+  to list.
+- Connections at rest now have **two independent switches**. A key can be *loaded*
+  (its 24 words are unsealed into this machine's memory, so it can read what the key
+  seals) or *released*; a host, separately, can be *activated* or not. Reading needs
+  both, and neither half alone opens a body: loading a key unwraps the profile's
+  data key, while activation derives the other half from the host's own passphrase
+  salt. Loading a key no longer makes every host it seals readable.
+- A key's passphrase is a property of the **key**, typed once per key and never
+  written to disk, so one restart means one prompt per passphrase-bearing key rather
+  than one per host. A batch activation covers the whole selection or nothing.
+- **Each key has one root**: the 24 words. Its slots are several ways to unseal those
+  words — this machine's credential store, a mounted KEK file, `TERMCP_CONFIG_KEK` —
+  not several secrets, and the word/phrase wrapper is gone because a phrase sealing
+  the key derived from that same phrase meant nothing. Words can be shown on demand
+  and re-created anywhere.
+- There is no store-wide lock and no key that is privileged (`default` is just the
+  name a store's first key starts with) — and no index either. Each host
+  is one directory under `ssh_configs/`, and *which key seals it* is the `keyID` in
+  that host's own envelope header, so the list of hosts is the directory listing and
+  any one inserted key can read it. An encrypted host's activation state lives in
+  its own directory (`active`), next to the ciphertext it describes, so one key can
+  no longer become the single point of failure for every other host. Encrypting a
+  host names its key explicitly. Plugging in a key, activating a host and showing
+  the words are human-only actions — an agent request is refused even with a valid
+  token.
+- **A wrong passphrase is refused, and it is said where it was asked.** Sealing a host
+  to a key that carries a passphrase proved nothing, so a typo did not fail: it sealed
+  that host to the typo, answered 200, and left the key's other hosts sealed to the
+  real passphrase. The store now verifies the passphrase against a host the key already
+  seals (each host's own salt is the verifier; a stored one would be an offline oracle)
+  and answers `400 passphrase_incorrect` with nothing written. Setup is unchanged for
+  the first host, which is the sealing that defines the passphrase.
+- The dialogs that ask for a passphrase now answer in place. Loading a key keeps its box
+  open when the passphrase is wrong, with the reason under the field and the input
+  selected for the retype; activating does the same instead of closing and writing the
+  reason into the keychain panel, which is not open when the action starts from a card.
+  Any failure raised from a card while the panel is closed is reported as a toast —
+  before, it went only into a panel that was not on screen.
+- **Loading a key can activate its hosts in the same answer.** A key that carries a
+  passphrase asks for it once and spends it on both layers: the words go into memory and
+  every host that key seals becomes readable. A wrong passphrase rolls the load back, so
+  a key is never left "loaded" with nothing it seals readable. Releasing a key never asks
+  for anything — the words leave memory and the passphrase has no part in that direction.
+- A host card carries two controls and they answer different questions: the **padlock** is
+  storage mode (locked = ciphertext, unlocked = plaintext TOML), and the caption above is
+  the second layer. Neither the lock nor deactivation asks for a passphrase; encrypting
+  and restoring each confirm first, because they change the form the bytes are kept in.
+- Loading a key from the keychain row asks for its passphrase there too, so the row's
+  "load" button cannot leave a passphrase key loaded and every host it seals unreadable.
+- Keys can be named, rotated (keeping or resetting their passphrase), backed up together, filtered by name, and deleted with a list of the hosts still in the way; encrypted hosts can be re-keyed directly onto another key in memory.
+- Addresses and user names can be masked globally; `?reveal=true` prints them. It
+  changes what is displayed, not what is stored, dialed or validated.
+- Hosts can be shared between people as text. Pick a host, paste the other
+  person's public key, and send them the block that comes out; on their side one
+  paste adds it to their list. The profile is sealed to their key alone, so the
+  chat server and the sender cannot read it.
+- Reading a connection whose key was deleted says so instead of "Not Found", and
+  one unreadable profile no longer fails the whole status call: the panel lists
+  it as encrypted and the delete removes the leftover ciphertext. A keychain file
+  that is gone while ciphertext remains is reported as `keyring_missing` rather than
+  "never encrypted", which is what makes those two states distinguishable without an
+  index — and a directory holding two `.enc` files is reported as damage instead of
+  silently resolving to the newest one.
+- Startup no longer reads the host catalog. It used to load every committed profile
+  to prove they still parse, which made opening an instance cost one disk read per
+  host — 143 s for 245 encrypted hosts — and let a single host whose key was not
+  loaded, or whose file no longer parsed, refuse to start the whole process,
+  including the panel that could repair it. Opening now costs one keychain file;
+  each profile is read when it is used and reports its own state then.
+- Listing hosts is no longer quadratic. Resolving one name rescanned every host
+  directory, so painting a list of 245 hosts took over two minutes; it now reads
+  that name's directory, with the whole-tree scan kept for the case it exists for
+  (a name whose spelling differs in case). 245 hosts: 138 s → 0.6 s.
+- A host card says whether it can be read, in three words on the right of its protocol
+  row, and that caption is the door: an unloaded key, an inactive host and an active one
+  are one slot, and a press moves the host to the other side of the state it is in.
+  Activating a host no longer detours through the keychain panel, and a host that was
+  reachable only from the batch selection — deactivate — has its own press. Single-host
+  dialogs name the host instead of saying "the selected host", and the hint line above
+  the passphrase field is gone (with the negative margin that made an empty one eat the
+  block above it).
+- The import-host button beside the sharing address is now the same glyph-only
+  button as the copy button next to it; its word lives in the tooltip.
+- Two dialog handlers that had been left dangling: opening the key-picker threw a
+  `ReferenceError` (so the lock on a host card did nothing), and the passphrase
+  dialog's Cancel button had no handler at all.
+- A key's passphrase can be changed on its own, without changing the words: *Change
+  passphrase* in the key's sheet asks for the old one and the new one, verifies the
+  old against every host the key seals before writing anything, then re-seals each
+  host with a fresh salt. The key keeps its id and its address. An empty new
+  passphrase removes the second layer. Rotating the key is still the way to change
+  the words.
+- The detail sheet's verbs are icons: the words' show/copy/export and the address's
+  copy are 15px glyphs with their word as a tooltip, and the receiving action is
+  named *Import host ciphertext* and carries the glyph for what it does. The four
+  paragraphs that explained restart behaviour and passphrase mechanics are gone —
+  the sheet keeps one line of fact, how many hosts the key seals, because that is a
+  property of THIS key rather than an explanation of the model.
+- The key detail sheet holds its shape: the words fold to a blurred grid instead
+  of disappearing (the dialog used to grow and shrink under the button), their
+  verbs sit on the heading row, and a released key's address box says it has no
+  address until it is loaded instead of showing an empty dashed box. Receiving a
+  shared host moved onto the public-key heading, where the address it uses is.
+- A key is **loaded** or **released**, not "inserted" or "removed": the words are
+  unsealed into memory, and releasing them drops them again. The keychain's title
+  line says how many are loaded, and the same word is used in `api.md`, in the
+  server's error messages and in the design document.
+- The keychain's tick and its four actions sit in the title bar beside the name they
+  act on. The row they used to occupy was a header between the title and the list it
+  names, and it was folded away by key count — which left an empty keychain, the
+  state a fresh install opens in, with nothing to press at all. The panel is now a
+  title bar, the list, and a filter row that appears once the list is long enough to
+  need one.
+- Importing keys takes a file as well as a paste: the dialog has a *Choose a backup
+  file* button, and the file's text lands in the box so it can be read before it
+  becomes keys. The warning banner above the host list that said some hosts' keys
+  were not inserted is gone — each row already carries its own lock and tooltip, and
+  the banner repeated them.
+- The tick inside a checked box takes its colour from the theme canvas again: a
+  dialog rule written for text fields was painting it in the body colour, so a light
+  theme showed a dark tick and a dark theme a light one.
+
+- **连接配置改为「两层阀门 + 助记词单根」**：钥匙有「插入 / 拔掉」，主机另有「激活 / 未激活」，两者是 AND。插上钥匙只解出该主机的数据密钥；激活密钥另由该主机自己的 salt 与钥匙口令派生，缺一层都解不开正文——插上钥匙不再等于名下所有主机都能读。
+- **口令是钥匙级的**：一把钥匙一个口令，输入一次即可激活它名下选中的所有主机；口令不落盘，因此重启后带口令的钥匙需要重新输入一次。批量激活要么整批成功，要么一台都不变。
+- **每把钥匙只有一条根：24 个助记词**。封装槽是「解出这 24 个词」的几种本机方式（系统凭据、挂载的 KEK 文件、`TERMCP_CONFIG_KEK`），不是几种并列秘密；用短语封装「由这些词派生的钥匙」没有意义，所以那条路径已删除。助记词可按需导出，也可在任何机器上重建这把钥匙。
+- **没有上锁/解锁、没有默认钥匙，也没有索引**。每台主机就是 `ssh_configs/` 下的一个目录，「被封在哪把钥匙下」写在它自己 envelope 的公开头里，因此主机名单就是目录列表，插着任意一把钥匙都能列出来；无口令主机的激活状态也落在它自己目录里（`active`），一把钥匙不再成为其余所有主机列表与写入的单点。加密一台主机时必须指明用哪把钥匙。插入钥匙、激活主机、导出助记词只能由人发起，Agent 即使持有 token 也会被拒绝。
+- **钥匙支持命名、轮换（可保留或重置口令）、一键备份全部已插入钥匙、按名字筛选**，删除被挡住时会列出挡路的主机名；已加密的主机可以直接在内存里校验后重封到另一把钥匙。
+- **地址与用户名可以全局打码**，`?reveal=true` 打印原文；打码只改变显示，不改变存储、连通或校验。
+- **连接可以以文本形式在两个人之间分享**：选一台主机、粘贴对方的公钥，把生成的一段文本发过去，对方粘贴即可加入自己的主机列表；内容只用对方的钥匙封装，聊天服务器和发送者都读不到。
+- 读一台「钥匙已被删除」的主机不再报「未找到」；单个读不了的主机也不会再让整个状态接口失败：面板把它列为已加密，删除操作会清掉残留密文。
+- **每把钥匙有自己的分享地址**。公钥由**那把钥匙**的主密钥派生，所以有三把钥匙就有三个地址；别人封给哪个地址，导入的主机就落在哪把钥匙下，不需要你再选一次。公钥在钥匙自己的视图里，主机分享对话框里不再显示「你的公钥」——那个值过去对每把钥匙都一样。
+- **钥匙有了名字，也可以轮换**。名字明文保存在钥匙链里（所以在什么都没插入时也能分辨），不是秘密。轮换（钥匙详情左下角）用新词建一把同名钥匙、把主机逐台交过去、再删掉旧的；正文密文全程不动，任何一步崩溃都只是两把钥匙并存，每台主机仍恰好能被其中一把打开。
+- **导入钥匙可以选文件**：除了粘贴，导入框多了「选择备份文件」，文件内容会先填进输入框，看清了再导入。**主机列表上方那条「有些主机的钥匙尚未插入」的提示去掉了**——每一行本来就带着自己的锁和说明，横幅只是把它们重复一遍。
+- **启动不再读主机目录**：以前开机要把每台主机的密文读一遍证明还能解析——245 台加密主机要 143 秒——而且只要有一台钥匙没载入或文件坏了，整个进程就不启动，连能修它的那个面板一起拒之门外。现在开机只读一个钥匙链文件，每台主机在被用到时才读、并报告它自己的状态。
+- **列主机不再是平方级**：解析一个名字会把所有主机目录扫一遍，于是列 245 台要两分多钟；现在只读这个名字自己的目录，全树扫描只留给它真正需要的场景（名字大小写不同）。245 台：138 秒 → 0.6 秒。
+- **主机卡片的锁定状态改成右侧一行小字 + 钥匙图标**：以前是浏览器默认样式的按钮、居中两行，占满了卡片唯一的空位；现在是协议行右端的一句状态（「未激活」/「钥匙未载入」）。图标用钥匙而不是第二个锁（卡片右上角已经有一个锁）：钥匙已载入是钥匙本身，钥匙没载入是把钥匙划掉。点击仍会说明该怎么办，且不会同时把钥匙链弹出来。
+- **导入主机密文只留图标**：与左边复制地址的按钮同款（`.cs-tool`、27×27、间距 6px），词义进 tooltip 与 aria-label。
+- **两处悬空的弹框处理器**：打开钥匙选择框会抛 `ReferenceError`（主机卡片上的小锁因此什么都不做），口令弹框的「取消」则是没有绑定。新增守卫 `TestEveryHandlerNulledOnCloseIsBound`：关闭时置 null 的名字必须先声明、并且真的被绑定过（`node --check` 两者都看不见）。
+- **可以只换口令、不换助记词**：钥匙详情里的「改口令」要求输入旧口令与新口令，先用旧口令验证它名下每一台主机（错了就一个字节都不写），再逐台用新 salt 重新封存；keyID 与分享地址不变。新口令留空 = 去掉第二层。换词仍然走「轮换」。
+- **钥匙详情保持形状**：助记词「隐藏」是模糊，不是消失（此前会改变弹窗高度，按钮从指针底下移走），三个动词移到标题行；未载入的钥匙公钥框会说明「载入之后它才有分享地址」，不再只是一个空虚线框。「接收分享的主机」移到公钥标题行，与它用到的地址在一起。
+- **钥匙改叫「载入 / 释放」**（不再用「插入 / 拔掉」）：载入是把 24 词解到内存，释放是从内存丢掉，钥匙本身与任何文件都不动。钥匙链标题行会显示已载入的把数，`api.md`、服务端错误信息与设计文档统一用同一套词。
+- **标题栏就是控制行**：反选勾选框与四个钥匙操作都在标题右边。它们原来待的那一行会按钥匙数量收起，于是空钥匙链——新装第一次打开就是这个状态——没有任何可点的东西。现在面板只有标题栏、列表，以及列表足够长时才出现的筛选框。**勾选的颜色也回到主题画布色**：对话框里给文本框写的规则曾把勾画成正文颜色，于是浅色主题是深色勾、深色主题是浅色勾；四个主题实测勾色现在等于各自的 `--bg-canvas`。
+### Added
+
+- `help open` now answers with its summary instead of the whole page (#324): every
+  declared flag has one line, `--all` still returns the page, and the published example
+  is fixed — it named a channel (`open a1f3:1 …`) where the verb acts on a session, so
+  copying it failed to parse.
+- Exported the daemon lifecycle as reusable packages (#309): `pkg/detach` (`Detach`,
+  `ProcessAlive`, `Terminate`, `Kill` — Unix `Setsid`/signals and Windows
+  `DETACHED_PROCESS`/`OpenProcess`, zero business dependencies) and `pkg/daemon`
+  (`Manager` with `Config{Name, DataDir, BuildArgs, BuildEnv, Probe, Stop}` for pidfile
+  services, plus `Spawn`, `IdleWatcher`, `PortReachable`, `IsServing`, `HTTPProbe`, and
+  `HTTPStop` for HTTP graceful shutdown on Windows). `internal/daemon` now delegates to
+  both instead of carrying a second copy.
+- A write can now prove itself and a file can be identified by content (#357 §1.4):
+  `write … --verify` reads the bytes back and compares their SHA256 to the one it just
+  computed (over the written range, so an `--offset` write verifies its own block),
+  `--recursive --verify` checks every file, and `get <session> file <path> --op sha256
+  [--offset N] [--length N]` hashes on the host without pulling the file into memory.
+  A mismatch is a failure with both digests named, not a 200: the bytes are already
+  there, so the reply says the contents are unknown rather than absent. The hash op
+  needs `file.read` as well as the filesystem capability — a digest is content.
+- Cross-file `grep`/`find` on `read … file` (#357 §1.1): `--grep RE` now filters a
+  FILE (it parsed and was silently dropped — the whole file came back) and searches a
+  DIRECTORY, answering `path:line:text` with `--glob`/`--context`/`--grep-limit` and a
+  closing line that names what it walked; `--name GLOB` answers the other question
+  (`find`: paths only). Matching happens in this process over the SFTP bytes, so a POSIX
+  host and a Windows one answer identically and a host with `rg` behaves like one
+  without. Every file the walk opens passes the same admission a single read passes
+  (the #358 class), links inside the tree are not followed, and files skipped as too
+  large, binary or refused are named rather than silently missing.
+- `run`: one shell line, no DSL (#319). `{"run": "df -h", "session": "6a29"}` opens a
+  one-shot pipe and answers with `exit_code` + stdout; `{"run": "cd /srv", "shell":
+  "6a29:1"}` types into an existing interactive shell and keeps its state. The line is
+  handed over verbatim — `;`, `|`, `&&`, quotes and `$()` belong to the shell — so the
+  DSL's ambiguity classes cannot arise. `session`/`shell` are alternatives and `cmd`+`run`
+  together is refused. The three arguments cost nothing extra: the schema's prose was
+  tightened to stay inside the 2500 B budget (2476 B).
+
+- `get ext` reports reconciliation fields beside the status word: `liveness` (a probe
+  taken at reply time — `alive` read from the channel's own transport, `checked_at`,
+  `session_status`, `exit_code` once it exits, and `pid_unknown` naming why no pid is
+  claimed: the process runs on the target host and SSH carries none), `restarts` (how
+  many times it came back up after going down, counted on the transition, not on every
+  bring-up) and `last_active_at`. A status string is the reconciler's belief; these are
+  measurements, and a closed channel now says it closed rather than reading as one that
+  never had a process.
+- Drive-prefixed Windows paths written with backslashes (`C:\tc\a.txt`,
+  `/C:\tc\a.txt`) are rewritten to the POSIX wire form (`/C:/tc/a.txt`) before
+  whitelist checks and file operations across `term`, file tools, `read … | write …`
+  pipelines and Web UI remote routes, with `path_adapted` / `Path-Adapted` recording the
+  adaptation. Unprefixed relative paths and `./C:\x` stay untouched so POSIX filenames
+  containing backslashes remain reachable; `help read` / `help write` include `/C:/...`
+  examples.
+- An extension channel declared with a stdio MCP server now works as a peer in `call`
+  and `get`: `get <channel> tools [<name>]` prints the live tool table or one schema,
+  and `call <channel> <tool> [<json-args>]` performs the `initialize` /
+  `notifications/initialized` handshake once per channel, invokes `tools/call`, and
+  returns the tool's text (`--json` keeps the frame, `--send` writes without waiting).
+  Plain `open` pipe channels still accept raw JSON-RPC frames only.
+- A template can hold several channels: `[[channel]]` names each process or endpoint,
+  with its own `kind` (http, stdio, pty), `name` and `target`, so one card can run an
+  MCP endpoint here and a worker there — two connections, one lifecycle, one retry
+  ladder, one place to edit when a host moves. A channel is opened once per session
+  rather than once per caller, `open ext <name> --channel <ch>` names which one, `get
+  ext` reports every channel with its handle, and `/ext/{name}/stream` talks to the
+  http one. The old single-channel spelling (`command`/`url`/`mode`) keeps its meaning
+  exactly; a file that uses both is refused rather than merged.
+- `ext create --template @file` now reads the file. The help text has always shown
+  that spelling, and it used to reach the TOML parser as the literal `@file`.
+- A template's tunnel can be built on another host's connection: `[[forward]]` takes
+  `via = "<ssh_config>"`, so ONE extension can mount an outbound MCP endpoint and open
+  an inbound listener on a machine it does not run on (a VPS dialling back, a NAT
+  traversal). The extension still has one target, so its handle and `open ext` are
+  unchanged — a via host is a connection opened for the tunnel alone, sharing one SSH
+  link per host. A tunnel that fails there is reported in `failures[]` with its `via`
+  host and retried on its own: the endpoint keeps answering, and the status stays
+  `available` because only the tunnel is down.
+- A `guide` tool publishes the onboarding material written for a PERSON — what to
+  configure next, why each step exists, and which steps are theirs — so a model can
+  hand it over verbatim instead of improvising a lesson. No argument returns the
+  first-run page (under 4 KB); `topic` returns one subject. The same pages are
+  published read-only as `termcp://guide/*`, `help` stays the machine view, and the
+  material says plainly that an empty `ls ext` on a fresh install is normal.
+- `read <session> file <directory>` lists a bounded, structured directory table
+  (type, path/name, size, mtime, mode) instead of failing with `is a directory`.
+  `--depth` (1–5) and `--limit` (200–2000) bound the walk; withheld entries and
+  unreadable entries are counted and named, and symbolic links are shown but never
+  followed.
+- `write <session> file <directory> --recursive` accepts a JSON object of
+  path→content and writes the tree in one call, with `--dry-run`, one result line per
+  file, and 100-file / 1 MiB caps. Absolute and parent-escaping keys are refused
+  before anything is written. Without `--recursive`, a directory target is refused
+  with both working spellings: one statement per file, or this batch form.
+- `close` takes several targets: `close a1f3:1,b2c4:1`, `close a1f3 --index 1,2,3`,
+  `close a1f3 --all`. One reply slot per target, in the order written, each carrying
+  a `Batch:` header naming the address it answers; a target that fails does not stop
+  or undo the ones beside it. `--all` on a channel handle is refused and names
+  `close <session>` instead of closing the session behind the caller's back.
+- `rm` takes several sessions (`rm a1f3,b2c4`) and clears the archive in one call
+  (`rm --dead`, preview with `--dry-run`). Running sessions are refused per entry and
+  never swept: `--dead` names its targets by state, so `--force` does not apply to it.
+
+- An extension's own notifications now reach an attached client: `/ext/{name}/stream`
+  keeps a reader on the channel per extension, so a frame the peer sends on its own
+  (`notifications/<own name>/<event>` — a spec-legal custom method) is delivered to
+  every open `GET` stream within the second, with no request in flight. That is what
+  makes a custom agent driven by a self-written MCP server possible without teaching
+  it termcp's directive language, and it is not `resources/subscribe`: the subscriber
+  consumes the peer's own methods, so all this had to do was not swallow them. The
+  reader also renews the extension's idle clock, so a subscriber keeps a lazily-started
+  peer alive between events.
+
+  peer alive between events. The version the endpoint reports is the peer's own
+  (`Mcp-Protocol-Version` from its `initialize` answer), not this build's constant, and
+  the answer window is five minutes: it is the backstop for a peer that never answers,
+  not a tool timeout, so a `tools/call` that takes a minute still returns its result.
+- A session can be named by its full id, by the `--name` it was connected with, or by
+  any prefix of the id that only one session matches: `run web:1`, `ls web`, `get
+  70ab`. A prefix shorter than four characters, or one that matches two sessions, is
+  refused with the candidates named rather than resolving to whichever is closer.
+  `ls` prints the shortest form that works, so the address in the reply is the one to
+  paste back.
+- The `term` tool takes `encoding`, the charset this call's reads assume (the same
+  flag `read --encoding` sets per statement). Without it a terminal that speaks GBK or
+  UTF-16 refuses the whole reply, because a byte that is not UTF-8 cannot be laid out
+  as text — the one thing a caller could not work around from outside.
+- Every verb's refusal now ends with one copyable example (`run h:1 $1`, `rm a1f3
+  --dry-run`, …). A caller that misspelled a flag used to be told "unknown flag" and
+  left to reconstruct the right line from a table; the example is the line, spelled
+  for the verb that refused.
+- A shell that reports its own completion is now heard on a plain `run`: when the
+  remote shell emits OSC 133 (`\x1b]133;D;<status>`) — Starship, oh-my-posh, fish
+  4.x, VS Code — the reply carries `Completion: exit` and `Exit-Code` without the
+  caller asking with `--until exit`. The marker is read from the window's raw bytes
+  only when the command actually printed something, so a still-running command is
+  not credited with a neighbour's status; with no marker the reply says nothing, the
+  same as before.
+- `write <session> file --old-text … --new-text …` reports which line it changed:
+  besides `bytes_written` the reply carries `line` and a one-line `diff` (`L2: -
+  timeout = 5 | + timeout = 30`). Checking an edit no longer means reading the file
+  back — the exact-replace primitive exists to avoid paying for the whole file.
+
+### Fixed
+
+- A resident extension whose process exits can be started again (#322): the exited
+  channel kept its fixed label for output draining, so `open ext <name>` failed with
+  "label already in use" and the resident was unrecoverable. Recovery archives the exited
+  channel (transcript still readable by id) and a retry now probes instead of detaching —
+  detaching killed the healthy process it was about to find.
+- The `Channel` header now carries an address `read` accepts (#303): `run use:<host>` and
+  the one-shot shortcut answered with the shell's internal id, so following the header
+  read the session's first channel and returned nothing while the process it started kept
+  running. A closed pipe also reports its exit code and points at `--stream e` for stderr.
+- A Windows-path spelling failure now puts the working spelling on its FIRST line
+  (#357 §1.5): the advice used to be appended after the server's error text, so a caller
+  skimming the top of a log concluded the file name was bad. It is still only offered on
+  a generic failure — a 404 or 403 is a verdict about a path the server could resolve.
+- Background archive restore (#353): `core.New` no longer blocks port binding by
+  loading every archived session manifest before `Listen`. `Start` launches the walk
+  in the background — reading one session directory at a time instead of holding
+  `store.mu.RLock` across the whole archive — and cancels cleanly on `Close`, while
+  re-running `SweepRestored` when it finishes. While the walk is running, `ls` reports
+  `Restoring: done/total` (and says so instead of a bare "(nothing is running)") and
+  `GET /api/daemon` carries `restoring: true` and `restore_progress`.
+
+- A reply no longer claims bytes it did not deliver (#269 #1): an empty window answered
+  `200` with `Content-Range: bytes A-B/N` naming the pty's stripped echo, so a caller
+  paging by that header skipped the window it was told it had seen. It is now `204` with
+  `Content-Range: bytes */N` and `Input-At`, and the output that arrives later is still
+  readable. A folded window (`Folded`) keeps its 206 and its range: it names the span it
+  withheld and the flag that fetches it. A `--stream` filter that selected nothing stays
+  `bytes */0` with `Omitted` — its own stream total is the only true range.
+- Fixed a whitelist and review-gate bypass on `read … | write …` pipelines (#358):
+  both ends now go through capability/path admission (`file_read` or `shell_output` on
+  the source, `file_write` on the destination) before the copy starts. A copy into a
+  review-gated session holds the operation as `copy <src> to <dst>` and runs the copy
+  when approved.
+- `/ext/{name}/stream` is served by the same streamable-HTTP transport as the
+  instance's own `/stream`, instead of a second, hand-rolled copy of it. Three things
+  the copy got wrong are gone with it: a request answered `202` (the spec forbids it,
+  and the client then waits on a stream the copy refused to serve), `GET` answered
+  `405` (that is exactly where the client waits), and no `Mcp-Session-Id` (so a later
+  `GET` could not name itself). `GET` without a session is now a `400` naming the
+  header, `DELETE` ends the session, a JSON-RPC batch is refused by name, and a frame
+  and the `Enter` that ends it are written under the channel's line lock — two
+  concurrent POSTs used to interleave into one unparseable line. Two clients on one
+  extension are independent even when both say `id:1`: each request leaves with a
+  termcp-minted id and comes back with the caller's id put back, and the frame's own
+  bytes are otherwise untouched. `initialize` is forwarded once and replayed from the
+  cache for later sessions (the peer's identity is the same for all of them), and
+  `notifications/initialized` is delivered once. A request the peer starts is answered
+  with an error rather than dropped, so a stdio server cannot deadlock waiting for a
+  response this endpoint will never send.
+
+- An MCP client that cancels a call now stops it. `notifications/cancelled` was read
+  and discarded, so a cancelled 60-second read ran to completion with nobody
+  listening; the reply also now says it was cancelled instead of reading like an
+  ordinary empty window. Keyed by (session, request id), so one client cannot cancel
+  another's call.
+- A client that leaves without sending DELETE no longer keeps a session for the life
+  of the process: the streamable transport records activity and reclaims a session
+  after two keepalive intervals, exempting any session with an open GET stream.
+- `MCP-Protocol-Version` is validated on POST: an unsupported version is a 400 that
+  names the one this instance speaks, instead of two sides interpreting the same
+  frames differently.
+- The frame window for `call` / `read --frame` defaults to the transport's own 8 MiB
+  limit instead of a 1 MiB floor. A larger `.call` frame used to answer 413 forever
+  (MCP has no chunking to retry with); above the limit the 413 now names the ceiling
+  and the flag that raises it.
+- `tools/call` carrying `_meta.progressToken` is answered as an event stream:
+  `notifications/progress` frames while the tool works, the ordinary result last.
+  `completion/complete` completes directive names from the vocabulary this build owns
+  (`cl` → `close`; an unknown prefix is an empty list, never an error), and the
+  capability is advertised only when the handler is registered. `term` also carries a
+  `title`, and the protocol layer can pass an `outputSchema` through for a tool whose
+  structured projection has one fixed shape (`term` does not: its projection is a
+  single slot or a `{"slots": [...]}` batch).
+- `call <peer>` can carry a frame that the command line cannot spell: `--file <path>`
+  and `@<path>` read the bytes on the host running termcp (8 MiB, JSON checked, the
+  path named in every refusal), so a large frame or one full of quotes never passes
+  through a quoting layer. `--file -` is refused with the reason: under a stdio
+  transport fd 0 carries the protocol itself.
+- A single-quoted frame can now hold an apostrophe: the POSIX splice `'\''` is
+  reassembled into one `'` for a verbatim payload, which is how a shell user writes it.
+  A `\'` inside single quotes — the spelling that used to produce invalid JSON three
+  layers down — is refused WITH the three spellings that work.
+- An extension's `--targets` / `[[targets]]` entry refuses keys nothing reads
+  (`command`, `args`, `mode`, `resident`, `allow`, …) instead of dropping them on
+  save: the stored template used to differ from the one the author wrote, and the
+  experiment run afterwards tested a shape nobody asked for. The message names the
+  keys an entry does take and where the extension-level ones belong; a wrong value
+  type is reported separately, so "spelled differently" and "not supported" never
+  read alike.
+- `get <session> mcp tools` — the form the instructions, `help get`/`help call`/
+  `help mcp` and `docs/agents/hints.md` all taught — answers 400, because the peer
+  address parser accepted `protocol` and rejected every other word before the branch
+  that implements `tools` could run. `tools` is now accepted in both positions
+  (`mcp tools` and `mcp:1 tools`), and the docs spell the address the way it is
+  printed: `mcp:<n>`, copied from `ls ext`.
+- `get <session> mcp:<n>` (the address without `tools`) dereferenced the browser
+  state a non-browser peer does not have. It now describes the peer and names the
+  next call.
+- `get <session> mcp:<n> <unknown word>` answered 200 with the generic description;
+  it is a 400 that lists the words the peer does answer.
+- `ls ext` prints a copyable next call under every row that carries a live address,
+  and one at the end of the list. The address column answers "what is installed";
+  nothing answered "what do I type".
+- `|` is documented and refused as what it is: `read … | write …`, the only pairing
+  this language has. A shell pipeline written in `cmd` (`grep x | head`) now gets the
+  pipe rule and where a shell line belongs, instead of "unknown directive: grep" and
+  a verb table. `Op.PipeEnd` declares the pair, so a vocabulary without one (an
+  embedder like zero-memcp) says it has no `|` operator rather than teaching a
+  construct it does not implement.
+- `term` accepts `command` as an alias for `cmd`; both present and different is a
+  400 naming both rather than a silent choice.
+- `--until exit` could never see the completion report it waits for: the scan asked
+  the output path for `raw`, a spelling the shared contract does not have, so it was
+  accepted and ignored and the reply came back with the ANSI bytes stripped — the
+  marker is an ANSI sequence. It now asks for `strip_ansi: false`, and a shell with
+  integration enabled answers with `Completion: exit` and its status.
+- A `403` names who can lift it and where: the capability that refused, the extension
+  holding it, and the three edits that would allow the call (`get ext`, `edit ext`, or
+  the Web UI). The old message named the restriction without saying it belonged to an
+  extension, which sends a reader looking for a setting in the session.
+- A `secrets` value is no longer echoed in the reply: `Path:` (and any refusal that
+  quotes the statement) prints the reference `$NAME` instead of the value it expanded
+  to. The command still runs with the real bytes and a written file still holds them —
+  what changed is the record, which is where the credential used to end up.
+  `vars` is echoed verbatim as before: it is part of the call's record.
+
+### 修复
+
+- **本地端口转发（-L）的监听地址不再被静默忽略**：Web UI 弹窗此前对所有方向都统一提交 `local_host`，而服务端 `-L` 实际只消费 `bind_host`，导致用户在界面填入任意非回环监听地址后，服务端均静默回落到 `127.0.0.1`；现弹窗根据方向自适应提交 `bind_host`（本地）与 `local_host`（远端），输入框标签按方向明确标示「本机」或「目标机」。
+- **`open <session> forward` 与 REST 接口明确拒绝方向不匹配的监听地址参数**：`--local-host` 仅用于 `-R`（远端目标机监听），`--bind-host` 用于 `-L`（本机监听）；传错参数不再被静默丢弃，而是返回 400 与可照抄的示例；同时 `-D`（动态 SOCKS5）拒绝传入固定的 `remote_host` / `remote_port`。
+- **`-R`（远端端口转发）支持 OpenSSH 通配符 `*` 绑定所有接口**：此前传 `*` 会被原样透传给底层 sshd 报 `tcpip-forward request denied by peer`，现与 `-L` 保持一致，通过 `ResolveBindHost` 规范化为 `0.0.0.0`；同样地，`-R` 与 `[[expose]]` 留空监听地址现在就是对端回环，而不是 Go 把 `:port` 读成的所有接口。
+- **`-D` 拒绝非回环监听时返回 400 而不是 500**：无认证的 SOCKS5 代理只绑回环这条规则没变，但那个地址是调用方写的，回 500（`operation_failed`）会把 agent 送去翻日志，而不是去看自己传的 flag。
 
 ## v0.2.10-rc.1 — 2026-11-13
 

@@ -29,6 +29,31 @@ func TestResolveBindHost(t *testing.T) {
 	}
 }
 
+// TestRemoteBindAddr pins the address a -R hands the TARGET's sshd.
+//
+// It is asserted here rather than by binding, for the reason the wildcard case is
+// never bound anywhere in this package (see TestLocalForwardReportsRequestedHost):
+// asking the OS for 0.0.0.0 is a network-wide act with a Windows firewall dialog
+// attached, while what the caller needs to know is which STRING reaches the sshd.
+// The empty case is the one that used to be silent: Go reads ":8080" as every
+// interface, so a remote forward asked for with no address published the tunnel on
+// the target's whole network — the same widening `ssh -L :8080` performs and the
+// one rule in bind.go exists to prevent.
+func TestRemoteBindAddr(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", "127.0.0.1:8080"},
+		{"   ", "127.0.0.1:8080"},
+		{"127.0.0.1", "127.0.0.1:8080"},
+		{"0.0.0.0", "0.0.0.0:8080"},
+		{"*", "0.0.0.0:8080"},
+		{"::1", "[::1]:8080"},
+	} {
+		if got := remoteBindAddr(tc.in, 8080); got != tc.want {
+			t.Errorf("remoteBindAddr(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 // TestIsLoopbackHost pins the guard on the dynamic (SOCKS5) forward, which is the
 // only forward whose destination is not fixed in advance and so cannot be reviewed
 // by where it points.

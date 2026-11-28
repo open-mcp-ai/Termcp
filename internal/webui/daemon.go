@@ -22,7 +22,21 @@ func (h *Handler) handleDaemonInfo(w http.ResponseWriter, r *http.Request) {
 		"started_at":      h.StartedAt,
 		"log":             h.DaemonLog,
 		"idle_timeout_ms": h.IdleTimeout.Milliseconds(),
+		/* UP, BUT STILL READING YESTERDAY (issue #353). The socket is bound before the
+		   session history is restored, so a probe that only asked "is anything
+		   listening" cannot tell a half-loaded instance from a loaded one. This is
+		   that difference, for a client that wants to wait for the full list. */
+		"restoring": h.restoring(),
 	})
+}
+
+// restoring reports the instance's own state, defaulting to false when no probe
+// was wired: an instance with no restore to report is not restoring.
+func (h *Handler) restoring() bool {
+	if h.Restoring == nil {
+		return false
+	}
+	return h.Restoring()
 }
 
 // handleDaemonStop shuts the process down gracefully — the same path a SIGTERM

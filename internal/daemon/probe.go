@@ -7,13 +7,10 @@
 package daemon
 
 import (
-	"bytes"
 	"context"
-	"io"
-	"net"
 	"net/http"
-	"strconv"
-	"time"
+
+	pkgdaemon "github.com/open-mcp-ai/termcp/pkg/daemon"
 )
 
 // Mark is the banner the public docs start with; it distinguishes a termcp
@@ -33,8 +30,13 @@ const ProbeHeader = "X-Termcp-Probe"
 // short-countdown instance alive is the opposite of what it reports. Only the
 // probe's own requests carry the tag — no other client does.
 func markProbe(req *http.Request) *http.Request {
+	// BOTH HEADERS, FOR ONE RELEASE (issue #309). The generic marker is what
+	// pkg/daemon sends and reads; the old X-Termcp-Probe is what an instance started by a
+	// previous build checks, and a probe that is not recognised as a probe feeds the very
+	// idle countdown it reports on. Sending both costs one header and makes a new CLI
+	// against an old daemon (and the reverse) behave.
 	req.Header.Set(ProbeHeader, "1")
-	return req
+	return pkgdaemon.MarkProbe(req)
 }
 
 // IsProbe reports whether a request came from a termcp management probe and
@@ -45,6 +47,9 @@ func IsProbe(r *http.Request) bool {
 	if r.Header.Get(ProbeHeader) != "" {
 		return true
 	}
+	if pkgdaemon.IsProbe(r, apiDaemonPath) {
+		return true
+	}
 	return r.Method == http.MethodGet && r.URL.Path == apiDaemonPath
 }
 
@@ -52,35 +57,12 @@ func IsProbe(r *http.Request) bool {
 // reads the credential-free /api.md, so no token is involved and nothing but
 // documentation state is touched.
 func IsServing(ctx context.Context, host string, port int) bool {
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, BaseURL(host, port)+"/api.md", nil)
-	if err != nil {
-		return false
-	}
-	resp, err := http.DefaultClient.Do(markProbe(req))
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return false
-	}
-	head, err := io.ReadAll(io.LimitReader(resp.Body, 8192))
-	if err != nil {
-		return false
-	}
-	return bytes.Contains(head, []byte(apiMark))
+	return pkgdaemon.IsServing(ctx, BaseURL(host, port), "/api.md", apiMark)
 }
 
 // PortReachable reports whether something accepts TCP connections on
 // host:port. It is deliberately HTTP-free, so a liveness poll never counts as
 // activity for the instance's idle timer.
 func PortReachable(host string, port int) bool {
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(ConnectHost(host), strconv.Itoa(port)), probeTimeout)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
+	return pkgdaemon.PortReachable(ConnectHost(host), port)
 }

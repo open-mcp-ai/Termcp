@@ -23,12 +23,14 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/open-mcp-ai/termcp/internal/sftp"
 	"io"
 	"strconv"
 	"strings"
 
 	"github.com/open-mcp-ai/termcp/internal/task"
 	"github.com/open-mcp-ai/termcp/internal/transcript"
+	"github.com/open-mcp-ai/termcp/mcp"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -76,9 +78,54 @@ func (s *Server) pipeCopy(ctx context.Context, stmt directive.Statement, _ termA
 				"byte stream. Use `read "+stmt.Target+" "+stmt.Kind+"` on its own to get frames.")}
 	}
 
+	// A PIPELINE DOES NOT GO THROUGH A TOOL CALL, so it would otherwise be the one file
+	// door where a Windows spelling is NOT adapted — the same path working as
+	// `read … file` and failing as `read … file … | write …`. The rule is the same one
+	// (sftp.WireSpelling) and it is applied to both ends here, before either is used.
+	var adapted []string
+	if spelled, ok := sftp.WireSpelling(stmt.Key); ok {
+		adapted = append(adapted, stmt.Key+" -> "+spelled)
+		stmt.Key = spelled
+	}
+	if spelled, ok := sftp.WireSpelling(dst.Key); ok {
+		adapted = append(adapted, dst.Key+" -> "+spelled)
+		dst.Key = spelled
+	}
+
 	src, bad := s.copySource(stmt)
 	if bad != nil {
 		return []envelope.Slot{*bad}
+	}
+
+	// A PIPELINE IS TWO FILE OPERATIONS, AND BOTH ENDS ARE ADMITTED (issue #358).
+	//
+	// This path used to call neither the guard nor the whitelist: it read `stmt.Key` and
+	// wrote `dst.Key` straight through the SFTP client, so an extension declaring
+	// `paths = ["/srv/x"]` refused `read <its session> file /etc/shadow` with 403 and
+	// then copied the same file with `read … | write …` — the whitelist bypassed by
+	// punctuation, and a session without `file.write` writing anyway.
+	//
+	// EACH END IS JUDGED BY ITS OWN SESSION, which is what makes the two-ended case
+	// answerable: the source needs the right to read where it reads, the destination the
+	// right to write where it writes. A read-only extension can therefore be a
+	// destination and not a source, which is the same asymmetry the single-ended forms
+	// already have.
+	//
+	// THE DESTINATION IS REVIEWED AS ONE ACTION, not as a stream: `file.write` is a
+	// reviewed capability, and a copy that landed while a human was still deciding would
+	// be the gate bypassed by a 202. The copy starts only once the decision comes back,
+	// and the reviewer is told it is a copy — see copy_from in summarizeOperation.
+	if slot := s.admitCopyEnd(ctx, stmt, sourceEndFor(src)); slot != nil {
+		return []envelope.Slot{*slot}
+	}
+	destArgs := argsOf(
+		"session_id", dst.Target,
+		"remote_path", dst.Key,
+		"copy_from", src.describe(),
+		"copy_src", src.toArgs(),
+	)
+	if slot := s.admitCopyEnd(ctx, stmt, copyEnd{tool: "file_write", args: destArgs}); slot != nil {
+		return []envelope.Slot{*slot}
 	}
 
 	// Its own context: the request's is cancelled the moment this handler returns,
@@ -107,8 +154,51 @@ func (s *Server) pipeCopy(ctx context.Context, stmt directive.Statement, _ termA
 			"Status": "running",
 		},
 		Body: renderTask(v) + "\n" + src.describe() + " -> " + dst.Target + " file " + dst.Key +
-			"\n`get task " + t.ID() + "` waits for it (the wait is the call's `timeout`).",
+			"\n`get task " + t.ID() + "` waits for it (the wait is the call's `timeout`)." +
+			adaptedNote(adapted),
 	}}
+}
+
+// copyEnd names one half of a pipeline for admission: the capability it needs and the
+// arguments that describe it.
+type copyEnd struct {
+	tool string
+	args map[string]any
+}
+
+// admitCopyEnd sends one half of a pipeline through the same admission exit every
+// handler uses, and returns the slot to answer with when it says no (issue #358).
+//
+// IT GOES THROUGH checkAdmission RATHER THAN THE HANDLERS, because the handlers would
+// do the work: this asks the question and leaves the bytes alone. What comes back is
+// one of three things — nil (allowed), a refusal (reachability, capability or path
+// whitelist), or a review-pending document that is returned as the reply, so the caller
+// learns a human is deciding rather than that the copy failed.
+func (s *Server) admitCopyEnd(ctx context.Context, stmt directive.Statement, end copyEnd) *envelope.Slot {
+	req := mcp.CallToolRequest{}
+	req.Params.Name = end.tool
+	req.Params.Arguments = end.args
+	bad, held := s.checkAdmission(ctx, end.tool, req)
+	if bad == nil && !held {
+		return nil
+	}
+	if view := reviewPendingFrom(bad); view != nil {
+		slot := view.slot(stmt.Path)
+		return &slot
+	}
+	slot := s.slotFromFailure(ctx, stmt, failureFromResult(bad))
+	return &slot
+}
+
+// sourceEndFor describes the left half of a pipeline for admission.
+func sourceEndFor(src copySource) copyEnd {
+	if src.channel != "" {
+		// A CHANNEL SOURCE IS A TRANSCRIPT READ, and its capability is the channel's own:
+		// a session whose whitelist omits shell.output must not be able to pipe its
+		// transcript into a file either.
+		return copyEnd{tool: "shell_output", args: argsOf("shell_id", src.channel)}
+	}
+	return copyEnd{tool: "file_read", args: argsOf("session_id", src.session, "remote_path", src.path)}
 }
 
 // copySource is what the left side of a pipeline contributes: the bytes' address.
@@ -123,6 +213,75 @@ type copySource struct {
 	offset int64
 	length int64
 	params transcript.Params
+}
+
+func (c copySource) toArgs() map[string]any {
+	m := map[string]any{
+		"channel": c.channel,
+		"session": c.session,
+		"path":    c.path,
+		"offset":  float64(c.offset),
+		"length":  float64(c.length),
+	}
+	if c.params.Offset != nil {
+		m["p_offset"] = float64(*c.params.Offset)
+	}
+	if c.params.TailLines != nil {
+		m["p_tail"] = float64(*c.params.TailLines)
+	}
+	if c.params.FromLine > 0 {
+		m["p_from_line"] = float64(c.params.FromLine)
+	}
+	if c.params.Stream != "" {
+		m["p_stream"] = c.params.Stream
+	}
+	return m
+}
+
+func copySourceFromArgs(m map[string]any) (copySource, bool) {
+	if len(m) == 0 {
+		return copySource{}, false
+	}
+	src := copySource{
+		channel: getString(m, "channel", ""),
+		session: getString(m, "session", ""),
+		path:    getString(m, "path", ""),
+		offset:  int64(getFloat64(m, "offset", 0)),
+		length:  int64(getFloat64(m, "length", 0)),
+	}
+	if v, ok := m["p_offset"].(float64); ok {
+		n := int64(v)
+		src.params.Offset = &n
+	}
+	if v, ok := m["p_tail"].(float64); ok {
+		n := int(v)
+		src.params.TailLines = &n
+	}
+	if v, ok := m["p_from_line"].(float64); ok && v > 0 {
+		src.params.FromLine = int64(v)
+	}
+	src.params.Stream = getString(m, "p_stream", "")
+	return src, src.channel != "" || src.path != ""
+}
+
+// replayApprovedCopy executes a held pipeline write once a human approves it (issue #358).
+//
+// IT RUNS SYNCHRONOUSLY inside ExecuteApprovedOperation rather than returning a 202 task,
+// because the reviewer who clicked Approve expects the file to be there when the click
+// returns — and if the copy fails (disk full, source gone), the Web UI error toast needs
+// the error right then instead of silently finishing in a background task nobody is
+// polling.
+func (s *Server) replayApprovedCopy(ctx context.Context, sessionID, remotePath string, rawSrc map[string]any) (*mcp.CallToolResult, error) {
+	src, ok := copySourceFromArgs(rawSrc)
+	if !ok {
+		return toolError(CodeInvalidArgument, "%s", "approved copy is missing its source"), nil
+	}
+	dst := &directive.Statement{Target: sessionID, Key: remotePath}
+	n, err := s.runCopy(ctx, src, dst, nil)
+	if err != nil {
+		return toolError(CodeOperationFailed, "%s", err.Error()), nil
+	}
+	return jsonResult(map[string]any{"bytes_written": n, "remote_path": remotePath}), nil
 }
 
 func (c copySource) describe() string {

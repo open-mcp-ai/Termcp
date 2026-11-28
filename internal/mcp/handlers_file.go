@@ -92,11 +92,142 @@ func (s *Server) handleFileRead(ctx context.Context, request mcp.CallToolRequest
 
 	defer sftpCli.Close()
 	defer releaseTransport()
+
+	// CROSS-FILE SEARCH (#357 §1.1). `--grep` on a file read used to parse and then be
+	// dropped: the caller named a filter and the whole file came back, which is the one
+	// answer shape this project refuses to ship. It now means the same thing on a file as
+	// on a directory — match the lines, render `path:line:text` — and `--name` answers the
+	// other question, "which paths are called this".
+	if slot, searched := s.fileSearch(ctx, sftpCli, args, sessionID, remotePath, charset, mode); searched {
+		return slot, nil
+	}
+
 	result, err := sftpCli.ReadFile(remotePath, offset, length, mode, localPath, charset, raw, numbered)
 	if err != nil {
+		// A DIRECTORY IS A LISTING, NOT A FAILED READ (#340).
+		//
+		// `read <session> file <path>` is how a caller asks "what is at this path", and
+		// it does not always know whether the path is a file: the answer used to be a
+		// 400 that said "is a directory" and named `run ls` as the alternative, which
+		// is a text the caller then has to parse. The listing is the answer to the
+		// question that was asked — with the entry cap and depth the caller passed, so
+		// a repository with a checked-in dependency tree does not arrive whole.
+		if errors.Is(err, filesftp.ErrIsDirectory) {
+			listing, lerr := sftpCli.ListDir(remotePath, dirLimit(args), searchDepth(args))
+			if lerr != nil {
+				return fileErr(lerr, remotePath), nil
+			}
+			out := toMap(listing)
+			out["is_dir"] = true
+			out["ok"] = true
+			return jsonResult(out), nil
+		}
 		return fileErr(err, remotePath), nil
 	}
 	return jsonResult(toMap(result)), nil
+}
+
+// fileSearch answers a `--grep`/`--name` file read, or reports that this read is not one.
+//
+// THE MODE IS CHECKED FIRST: a search answers with TEXT, so `--mode hex` or `--mode file`
+// beside it is two different requests in one call, and the refusal names the flag that has
+// to go. Silently ignoring the mode would answer the search and drop the mode, which is the
+// failure this function exists to end.
+func (s *Server) fileSearch(ctx context.Context, cli *filesftp.Client, args map[string]any,
+	sessionID, remotePath, charset, mode string) (*mcp.CallToolResult, bool) {
+	pattern := getString(args, "pattern", "")
+	nameGlob := getString(args, "name", "")
+	fileGlob := getString(args, "glob", "")
+	// PRESENT-BUT-EMPTY IS NOT ABSENT, and the difference matters here: an empty pattern
+	// matches every line, so `--grep ''` would return the whole file while looking like a
+	// filter. The DSL keeps the two apart (an explicit `--grep ''` sets the argument, an
+	// omitted flag does not), so this is the one place that can refuse it.
+	if v, ok := args["pattern"]; ok && v == "" {
+		return toolError(CodeInvalidArgument, "%s",
+			"`--grep ''` is an empty pattern, and an empty pattern matches every line — it would return the "+
+				"whole file dressed as a search. Give it a regular expression, or read the file without --grep."), true
+	}
+	if v, ok := args["name"]; ok && v == "" {
+		return toolError(CodeInvalidArgument, "%s",
+			"`--name ''` is an empty glob, and an empty glob matches every path — it would list the tree dressed as "+
+				"a search. Give it a pattern (`--name '*.log'`), or read the directory without --name."), true
+	}
+	if pattern == "" && nameGlob == "" {
+		// `--glob`/`--context` WITHOUT a question are refused too: they select what to
+		// search, and there is nothing to select for. Accepting them here would repeat
+		// the exact bug this change fixes, one flag over.
+		if fileGlob != "" || int(getFloat64(args, "context", 0)) > 0 || int(getFloat64(args, "grep_limit", 0)) > 0 {
+			return toolError(CodeInvalidArgument, "%s",
+				"`--glob`, `--context` and `--grep-limit` select or shape a SEARCH, and this call names neither: "+
+					"add `--grep RE` to search contents, or `--name GLOB` to search paths. Without one they would "+
+					"be accepted and change nothing."), true
+		}
+		return nil, false
+	}
+	if mode != "" && mode != "text" {
+		return toolError(CodeInvalidArgument, "%s",
+			"a search answers with text, so `--mode "+mode+"` and `--grep`/`--name` cannot ride in one call. "+
+				"Drop the mode to search, or drop the search to read the "+mode+"."), true
+	}
+	info, statErr := cli.StatFile(remotePath)
+	if statErr != nil {
+		return fileErr(statErr, remotePath), true
+	}
+	f, bad := parseFileSearch(pattern, nameGlob, fileGlob,
+		int(getFloat64(args, "context", 0)), int(getFloat64(args, "grep_limit", 0)), !info.IsDir)
+	if bad != nil {
+		return bad, true
+	}
+	var (
+		lines   []string
+		trailer *searchTrailer
+		err     error
+	)
+	if info.IsDir {
+		lines, trailer, err = s.searchRemoteTree(ctx, cli, sessionID, remotePath, charset, f, dirLimit(args), searchDepth(args))
+	} else {
+		lines, trailer, err = s.searchRemoteFile(cli, remotePath, charset, f)
+	}
+	if err != nil {
+		return fileErr(err, remotePath), true
+	}
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString(l)
+		b.WriteString("\n")
+	}
+	// THE TRAILER IS ALWAYS PRESENT, even with no matches: "0 match(es) in 12 files, depth
+	// 2" is the difference between searching and not looking, and the caller cannot
+	// derive it from an empty body.
+	b.WriteString(trailer.line())
+	return &mcp.CallToolResult{Content: []mcp.TextContent{mcp.NewTextContent(b.String())}}, true
+}
+
+// dirLimit and dirDepth read the two caps a directory listing takes.
+//
+// THEY ARE THE CALLER'S, WITH A CEILING. `--limit` bounds how many rows come back and
+// `--depth` how many levels are walked; both are clamped so a caller cannot ask for a
+// listing that floods its own context, and the reply says what was withheld.
+func dirLimit(args map[string]any) int {
+	n := int(getFloat64(args, "limit", 0))
+	if n <= 0 {
+		return 200
+	}
+	if n > 2000 {
+		return 2000
+	}
+	return n
+}
+
+func dirDepth(args map[string]any) int {
+	n := int(getFloat64(args, "depth", 0))
+	if n <= 0 {
+		return 1
+	}
+	if n > 5 {
+		return 5
+	}
+	return n
 }
 
 func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -121,6 +252,9 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	if remotePath == "" {
 		return toolError(CodeInvalidArgument, "%s", remotePathRequired), nil
 	}
+	if rawSrc, ok := args["copy_src"].(map[string]any); ok {
+		return s.replayApprovedCopy(ctx, sessionID, remotePath, rawSrc)
+	}
 	if data == "" {
 		return toolError(CodeInvalidArgument, "%s", "data required"), nil
 	}
@@ -131,8 +265,26 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	}
 	defer sftpCli.Close()
 	defer releaseTransport()
+
+	// A DIRECTORY TARGET IS A DIFFERENT OPERATION, and it has to say so (#340).
+	//
+	// `write` carries ONE payload: --data is the bytes of one file, and a directory
+	// has no bytes of its own. So a directory is refused BY NAME rather than opened
+	// and failed deep inside the write, and the refusal names the two ways to write
+	// several files — one statement per file in a single cmd (one call, one slot
+	// each), or --recursive with a JSON object of path→content.
+	if fi, serr := sftpCli.StatFile(remotePath); serr == nil && fi.IsDir && !getBool(args, "recursive", false) {
+		return toolError(CodeInvalidArgument, "%s", dirWriteRefusal(remotePath)), nil
+	}
+	if getBool(args, "recursive", false) {
+		return s.writeTree(ctx, sftpCli, sessionID, remotePath, data, mode, getBool(args, "dry_run", false), getBool(args, "verify", false)), nil
+	}
+
 	rep, err := sftpCli.WriteFile(remotePath, offset, data, mode, "", 0, 0)
 	if err != nil {
+		if errors.Is(err, filesftp.ErrIsDirectory) {
+			return toolError(CodeInvalidArgument, "%s", dirWriteRefusal(remotePath)), nil
+		}
 		return fileErr(err, remotePath), nil
 	}
 	// THE RECEIPT HAS TO PROVE THE BYTES (issue #302). `bytes_written: 542` next to an
@@ -148,7 +300,66 @@ func (s *Server) handleFileWrite(ctx context.Context, request mcp.CallToolReques
 	if rep.Decoded != "" {
 		out["decoded"] = rep.Decoded + "; the file holds these bytes, not the payload as typed — --mode raw writes the characters verbatim"
 	}
+	// --verify MAKES THE FAR SIDE PROVE IT (#357 §1.4). A byte count next to a hash the
+	// caller cannot check is still a claim: the file could have been truncated by the
+	// transfer, written to a different path, or changed by something else on the host
+	// between the write and the read. Only reading the bytes back settles it, and the
+	// value of that is exactly the case a caller cannot do locally — "did the copy arrive
+	// intact on the other machine".
+	if getBool(args, "verify", false) {
+		verified, detail := s.verifyRemoteWrite(sftpCli, remotePath, offset, rep)
+		for k, v := range detail {
+			out[k] = v
+		}
+		if !verified {
+			// A FAILED VERIFICATION IS NOT A 200. The write did happen — which is why the
+			// refusal is a distinct status and not "the write failed": the caller has to
+			// know that the bytes are already on the host and that they do not match.
+			return toolError(CodeOperationFailed, "%s",
+				"the write landed but the read-back does not match it: "+getString(detail, "_mismatch", "the bytes differ")+
+					". The file was written, so treat its contents as unknown rather than absent — re-read it with "+
+					"`read <session> file "+remotePath+"` before deciding what to do."), nil
+		}
+	}
 	return jsonResult(out), nil
+}
+
+// verifyRemoteWrite reads the file back and compares it, byte for byte, to what was just
+// written.
+//
+// THE COMPARISON IS THE HASH, NOT THE LENGTH: two files can share a byte count and differ
+// in content, and a length check would report success for a file filled with the right
+// number of zeroes. The digest comes from the same helper the write used, so the two sides
+// of the comparison cannot drift into different algorithms.
+func (s *Server) verifyRemoteWrite(cli *filesftp.Client, remotePath string, offset *int64, rep filesftp.WriteReport) (bool, map[string]any) {
+	detail := map[string]any{}
+	info, err := cli.StatFile(remotePath)
+	if err != nil {
+		detail["_mismatch"] = "the file cannot be read back: " + firstLineOf(err.Error())
+		return false, detail
+	}
+	detail["total_size"] = info.Size
+	// THE SAME RANGE THAT WAS WRITTEN. A partial write (`--offset`) hashes only its own
+	// block — the receipt's SHA256 is that block's, not the file's — so comparing against
+	// the whole file would report a mismatch for a correct partial write. The hash is
+	// streamed from the far side, so verifying a 2 GB file costs no memory here.
+	start := int64(0)
+	if offset != nil && *offset > 0 {
+		start = *offset
+	}
+	got, n, err := cli.SHA256Range(remotePath, start, rep.BytesWritten)
+	if err != nil {
+		detail["_mismatch"] = "the file cannot be read back: " + firstLineOf(err.Error())
+		return false, detail
+	}
+	detail["verified"] = got == rep.SHA256
+	detail["sha256_on_host"] = got
+	detail["bytes_on_host"] = n
+	if got != rep.SHA256 {
+		detail["_mismatch"] = fmt.Sprintf("wrote %s (%d bytes), the host has %s (%d bytes)",
+			rep.SHA256, rep.BytesWritten, got, n)
+	}
+	return got == rep.SHA256, detail
 }
 
 // handleFileReplace performs an exact, unique, atomic replacement inside a file.
@@ -182,14 +393,23 @@ func (s *Server) handleFileReplace(ctx context.Context, request mcp.CallToolRequ
 	defer sftpCli.Close()
 	defer releaseTransport()
 
-	n, err := sftpCli.ReplaceInFile(remotePath, oldText, newText)
+	rep, err := sftpCli.ReplaceInFileReport(remotePath, oldText, newText)
 	if err != nil {
 		return fileErr(err, remotePath), nil
 	}
-	// bytes_written is the whole point of reporting here: the caller can confirm the
-	// edit landed without a second stat, and a replace that reports nothing leaves
-	// "did it work?" to be answered by re-reading the file.
-	return jsonResult(map[string]any{"ok": true, "bytes_written": n, "remote_path": remotePath}), nil
+	// WHAT CHANGED, NOT ONLY HOW MANY BYTES (issue #357 §1.2). `bytes_written` confirms a
+	// file was rewritten; `line` / `old` / `new` confirms which line landed without
+	// re-reading the whole file to look.
+	out := map[string]any{
+		"ok":            true,
+		"bytes_written": rep.Bytes,
+		"remote_path":   remotePath,
+		"line":          rep.Line,
+	}
+	if rep.Old != "" || rep.New != "" {
+		out["diff"] = fmt.Sprintf("L%d: - %s | + %s", rep.Line, rep.Old, rep.New)
+	}
+	return jsonResult(out), nil
 }
 
 // remotePathRequired is the one refusal for a file request with no path: it names
@@ -527,6 +747,26 @@ func (s *Server) handleFileFsOp(ctx context.Context, request mcp.CallToolRequest
 	defer releaseTransport()
 
 	switch action {
+	case "sha256":
+		// THE HASH A CALLER CAN CHECK AGAINST ITS OWN COPY (#357 §1.4). `--op sha256` was
+		// refused, so "the file on that host is the file I have" could only be answered by
+		// length — and length is the one fact a truncated write preserves.
+		//
+		// STREAMED, not read into memory: this is the operation a 2 GB artifact needs.
+		remotePath := getString(args, "remote_path", "")
+		if remotePath == "" {
+			return toolError(CodeInvalidArgument, "%s", "sha256 requires remote_path"), nil
+		}
+		offset := int64(getFloat64(args, "offset", 0))
+		length := int64(getFloat64(args, "length", 0))
+		sum, n, err := sftpCli.SHA256Range(remotePath, offset, length)
+		if err != nil {
+			return fileErr(err, remotePath), nil
+		}
+		return jsonResult(map[string]any{
+			"sha256": sum, "bytes_hashed": n, "offset": offset,
+			"path": remotePath, "ok": true,
+		}), nil
 	case "truncate":
 		remotePath := getString(args, "remote_path", "")
 		// SIZE IS REQUIRED, AND ZERO IS A REAL SIZE. The old check demanded
@@ -599,7 +839,7 @@ func (s *Server) handleFileFsOp(ctx context.Context, request mcp.CallToolRequest
 		}
 		return jsonResult(toMap(result)), nil
 	default:
-		return toolError(CodeInvalidArgument, "%s", "action must be truncate, realpath, or statvfs"), nil
+		return toolError(CodeInvalidArgument, "%s", "action must be truncate, realpath, statvfs, or sha256"), nil
 	}
 	return successResult(), nil
 }
@@ -653,11 +893,23 @@ func resolveLocalPath(p string) string {
 // recovered from the error text (which is the server's, and may be rewritten).
 func fileErr(err error, remotePath string) *mcp.CallToolResult {
 	code, msg := classifyFileErr(err)
-	if code == CodeOperationFailed {
-		msg += wireSpellingHint(remotePath)
-	}
 	if code == CodeFileNotFound {
 		msg = fmt.Sprintf("%s. Check that the host and remote path are correct before retrying", msg)
+	}
+	// THE HINT GOES FIRST WHEN THE PATH SPELLING IS WRONG (#357 §1.5).
+	//
+	// It used to be appended, so the first line of a failure — the line a log shows and a
+	// reader skims — was the server's error text, and the one sentence that says what to
+	// write instead came after it. A caller who read only the top concluded the file name
+	// was bad. Putting the fix first costs nothing and answers that in the same bytes.
+	//
+	// STILL ONLY ON CodeOperationFailed: a 404 or a 403 is a verdict about a path the
+	// server COULD resolve, and spelling advice there is noise on the common case (see
+	// TestTheSpellingHintIsNotAddedToAPlainMiss).
+	if code == CodeOperationFailed {
+		if hint := strings.TrimPrefix(wireSpellingHint(remotePath), "\n\n"); hint != "" {
+			msg = hint + "\n\n" + msg
+		}
 	}
 	return toolError(code, "%s", msg)
 }
@@ -708,9 +960,10 @@ func wireSpellingHint(remotePath string) string {
 	return "\n\nHint: this path is a Windows drive path, and SFTP carries paths in POSIX form, " +
 		"where the absolute spelling is " + "/" + remotePath + ". A server that resolves relative " +
 		"paths against a working directory treats " + remotePath + " as relative and joins it onto " +
-		"that directory — which is why the error above names a doubled path. Use " + "/" + remotePath +
-		" in the request AND in the extension's declared paths, since the whitelist matches the " +
-		"string you pass."
+		"that directory — which is why the error above names a doubled path. Write " + "/" + remotePath +
+		" in the request and in the extension's declared paths, since the whitelist matches the same " +
+		"spelling. (A backslash spelling is adapted automatically and the reply says so via " +
+		"path_adapted; this hint is for the forward-slash form that is still missing its leading slash.)"
 }
 
 // looksLikeWindowsDrivePath reports whether p is a drive path as a caller would type
@@ -740,4 +993,18 @@ func isWindowsDrivePrefixedPath(p string) bool {
 		return false
 	}
 	return p[3] == '/' || p[3] == '\\'
+}
+
+// searchDepth defaults to 5 for recursive searches (plain directory listings stay at 1)
+// and caps at 10, so `read <session> file /repo --grep …` walks a real source tree
+// without being told a flag.
+func searchDepth(args map[string]any) int {
+	n := int(getFloat64(args, "depth", 0))
+	if n <= 0 {
+		return 5
+	}
+	if n > 10 {
+		return 10
+	}
+	return n
 }

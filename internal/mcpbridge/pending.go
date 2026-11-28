@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,12 +37,8 @@ func requestKey(msg []byte) (string, bool) {
 
 // recordPending notes a forwarded SSE request that is still owed a reply.
 func (b *bridge) recordPending(id string) {
-	b.pendingMu.Lock()
-	defer b.pendingMu.Unlock()
-	if b.pending == nil {
-		b.pending = make(map[string]int)
-	}
-	b.pending[id]++
+	v, _ := b.pending.LoadOrStore(id, &atomic.Int64{})
+	v.(*atomic.Int64).Add(1)
 }
 
 // replySaw clears one owed reply when a relayed message carries its id.
@@ -50,19 +47,15 @@ func (b *bridge) replySaw(msg []byte) {
 	if id == nil {
 		return
 	}
-	b.pendingMu.Lock()
-	defer b.pendingMu.Unlock()
-	n, ok := b.pending[string(id)]
+	v, ok := b.pending.Load(string(id))
 	if !ok {
 		return
 	}
-	if n == 1 {
-		delete(b.pending, string(id))
-	} else {
-		b.pending[string(id)] = n - 1
-	}
-	if len(b.pending) == 0 {
-		b.pendingCond.Broadcast()
+	if counter := v.(*atomic.Int64); counter.Add(-1) <= 0 {
+		// COMPARE-AND-DELETE, so two replies racing on the last count cannot delete a
+		// third forward's fresh entry: only the pointer this call saw is removed.
+		b.pending.CompareAndDelete(string(id), v)
+		b.wakePending()
 	}
 }
 
@@ -72,11 +65,33 @@ func (b *bridge) replySaw(msg []byte) {
 // the reply — SSE replies arrive decoupled from POST acceptance, so stdin EOF
 // alone does not mean the batch is complete.
 func (b *bridge) waitPendingReplies() {
-	b.pendingMu.Lock()
-	defer b.pendingMu.Unlock()
-	for len(b.pending) > 0 && !b.fatalPending && b.ctx.Err() == nil {
-		b.pendingCond.Wait()
+	for b.ctx.Err() == nil && !b.fatalPending.Load() {
+		// THE GENERATION IS LOADED BEFORE THE MAP IS READ: a reply that arrives
+		// between the two would otherwise be seen by the read but its wake by neither
+		// side, and the wait would settle on a queue that had just emptied.
+		generation := b.pendingWakeGen()
+		if !b.anyPending() {
+			return
+		}
+		select {
+		case <-generation:
+		case <-b.ctx.Done():
+			return
+		}
 	}
+}
+
+// anyPending reports whether any forwarded request is still owed a reply.
+func (b *bridge) anyPending() bool {
+	outstanding := false
+	b.pending.Range(func(_, v any) bool {
+		if v.(*atomic.Int64).Load() > 0 {
+			outstanding = true
+			return false
+		}
+		return true
+	})
+	return outstanding
 }
 
 // requestID returns the message's JSON-RPC id when it carries one (requests);

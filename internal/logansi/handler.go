@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"strings"
-	"sync"
 )
 
 const (
@@ -28,14 +27,16 @@ type Options struct {
 type Handler struct {
 	opts   Options
 	w      io.Writer
-	mu     *sync.Mutex // shared across WithAttrs/WithGroup copies (same writer)
+	tok    *chan struct{} // shared across WithAttrs/WithGroup copies (same writer)
 	groups []string
 	attrs  []slog.Attr
 }
 
 // NewTextHandler returns a handler writing to w.
 func NewTextHandler(w io.Writer, opts Options) slog.Handler {
-	return &Handler{opts: opts, w: w, mu: new(sync.Mutex)}
+	tok := make(chan struct{}, 1)
+	tok <- struct{}{}
+	return &Handler{opts: opts, w: w, tok: &tok}
 }
 
 func (h *Handler) Enabled(_ context.Context, level slog.Level) bool {
@@ -106,8 +107,10 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 
 	b.WriteByte('\n')
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	// A 1-SLOT TOKEN, NOT A MUTEX: the critical section IS the write, and a channel
+	// makes the ownership explicit without holding a lock across I/O (AGENTS.md).
+	<-*h.tok
+	defer func() { *h.tok <- struct{}{} }()
 	_, err := io.WriteString(h.w, b.String())
 	return err
 }

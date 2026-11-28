@@ -129,6 +129,30 @@ function createBatchBar(cfg) {
     });
   }
 
+  /* One tick, one flash of the verb.
+   *
+   * While targets are locked, the plate's two keys are where the batch action lives —
+   * but they are away at the row's right end, and a person ticking a card by hand is
+   * looking at the card. Without an answer for each tick, the row stays silent until
+   * the first click on the verb, which is the moment they were supposed to be told
+   * about. So every tick the plate flashes once: the accent ring and the glyphs light
+   * for ~0.4s and decay back.
+   *
+   * Only on an ADD, and only where the plate exists: unticking is not "there is more
+   * to do here". Columns that run alwaysOn flash too — their plate is the only cue
+   * that the tap did anything at all, since it may appear for the first time. */
+  function flashVerb() {
+    var split = el(cfg.splitId);
+    var plate = split ? split.querySelector('.nethub-open-plate') : null;
+    if (!plate) return;
+    plate.classList.remove('is-ticking');
+    /* Reading a layout property restarts the animation. Without it a second tick
+       inside one animation adds a class that is already there and nothing moves —
+       the failure mode that makes people tick twice to check whether it registered. */
+    void plate.offsetWidth;
+    plate.classList.add('is-ticking');
+  }
+
   function update() {
     var n = count();
     paintToggle(n);
@@ -203,11 +227,13 @@ function createBatchBar(cfg) {
    * of the same control needs. */
   function toggleSelection(name, tile) {
     if (!name) return;
-    if (state.ids.has(name)) state.ids.delete(name);
-    else state.ids.add(name);
+    var adding = !state.ids.has(name);
+    if (adding) state.ids.add(name);
+    else state.ids.delete(name);
     if (tile) tile.classList.toggle('batch-selected', state.mode && state.ids.has(name));
     syncCards();
     update();
+    if (adding && state.mode) flashVerb();
   }
 
   /* The caret's dropdown, and the two ways out of it: a click anywhere else, and

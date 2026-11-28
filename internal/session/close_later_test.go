@@ -61,9 +61,7 @@ func TestCloseLaterAcceptsPipeAndFulfillsOnExit(t *testing.T) {
 
 	// While the shell is still running, closeIfLastShellEnded must not terminate.
 	s.closeIfLastShellEnded()
-	s.mu.RLock()
-	st := s.Status
-	s.mu.RUnlock()
+	st := s.liveStatus()
 	if st != api.SessionRunning {
 		t.Fatalf("session must stay running while shell is live, got %s", st)
 	}
@@ -75,9 +73,7 @@ func TestCloseLaterAcceptsPipeAndFulfillsOnExit(t *testing.T) {
 	// Give the transition a moment to flip to DEAD.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		s.mu.RLock()
-		st = s.Status
-		s.mu.RUnlock()
+		st = s.liveStatus()
 		if st == api.SessionExited || st == api.SessionError {
 			return
 		}

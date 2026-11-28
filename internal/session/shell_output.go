@@ -13,11 +13,9 @@ import (
 	"github.com/open-mcp-ai/termcp/pkg/api"
 )
 
-// Lock ordering: shellStateMu -> mu (and shellStateMu -> cs.mu).
-// Never acquire in reverse order. s.mu and cs.mu are leaves; shellStateMu is
-// only taken by session-level transitions (close/DEAD/terminate, new shells).
-// The manager-assigned callbacks and the per-shell closed flag are atomics and
-// need no lock (see field docs below).
+// NO LOCK HIERARCHY. Session metadata is an immutable snapshot (live); shell
+// teardown use atomic flags and re-checks (see shells.go), so channel opens dial
+// outside any lock (AGENTS.md rule 1). Callbacks and closed flags are atomics.
 
 func (s *Session) readOutput(ctx context.Context, readerID int, timeout time.Duration, stripAnsi bool, maxLines int, persist bool, maxBytes int) (string, error) {
 	data, err := s.buf.ReadLimited(ctx, readerID, timeout, maxBytes, maxLines, nil)
@@ -66,8 +64,6 @@ func (s *Session) ReadTerminalStream(ctx context.Context, readerID int, timeout 
 
 // OutputByteRange returns a copy of retained raw output bytes [start, start+max) and total retained length.
 func (s *Session) OutputByteRange(start int64, max int) ([]byte, int64, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if s.buf == nil {
 		return nil, 0, fmt.Errorf("output buffer unavailable")
 	}
@@ -77,8 +73,6 @@ func (s *Session) OutputByteRange(start int64, max int) ([]byte, int64, error) {
 
 // OutputBaseOffset is the absolute offset of the earliest retained byte.
 func (s *Session) OutputBaseOffset() int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if s.buf == nil {
 		return 0
 	}
@@ -87,8 +81,6 @@ func (s *Session) OutputBaseOffset() int64 {
 
 // BufferLen returns retained raw output length in bytes (for tail slicing).
 func (s *Session) BufferLen() int64 {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	if s.buf == nil {
 		return 0
 	}

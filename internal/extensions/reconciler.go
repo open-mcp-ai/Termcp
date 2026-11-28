@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -51,22 +53,29 @@ type Reconciler struct {
 	// attachment are behind their own locks, because a probe goroutine writes them
 	// while the walk reads them. It also guards cancel, so Start and Stop can be
 	// called from different goroutines.
-	mu       sync.Mutex
-	states   map[string]*extState
-	groups   map[string]*extGroup
-	onChange func()
+	// states and groups are sync.Maps: every lookup, insert and delete touches one
+	// entry, and whole-map walks (status lists, garbage collection) Range over a
+	// snapshot. ZERO LOCKS ON THE RECONCILER.
+	states sync.Map // key string -> *extState
+	groups sync.Map // key string -> *extGroup
 
-	// syncs carries the names of templates whose saved file changed, and revive
-	// carries "a profile was rewritten". They are queues, not signals to a walk: the
-	// callback that fills them runs inside a store's write, so it must only drop the
-	// name in and get out — doing the work there would deadlock on the store's own
-	// lock, which is exactly what a synchronous subscriber did.
+	// onChange is atomic so the callback fires without any lock held.
+	onChange atomic.Pointer[func()]
+
+	// watched answers "is somebody listening to this extension's events" (see
+	// SetWatched). Nil means nobody set one, and then the idle window is the whole rule.
+	//
+	// AN ATOMIC POINTER, NOT A FIELD: SetWatched is called once at wiring time from the
+	// wiring goroutine, and the predicate is called from the timer and from the walk —
+	// different goroutines, no lock between them, which is exactly the shape that made the
+	// race detector speak. Published as a whole value, like onChange below.
+	watched atomic.Pointer[func(name string) bool]
+
 	syncs  chan string
 	revive chan struct{}
-	// ctx is the run's context, kept so an event that arrives at any time — a save
-	// from a tool call, a deleted file — has a run to join.
-	ctx    context.Context
-	cancel context.CancelFunc
+
+	runCtx atomic.Pointer[context.Context]
+	cancel atomic.Pointer[context.CancelFunc]
 	done   chan struct{}
 
 	// probes tracks the connection attempts the run loop has launched and not yet
@@ -103,7 +112,12 @@ type Status struct {
 	// ShellID is the channel this extension runs on, and the handle an agent
 	// drives it through. It is empty for a template that declares no shell: a
 	// read-only file window has no channel of its own.
-	ShellID  string          `json:"shell_id,omitempty"`
+	ShellID string `json:"shell_id,omitempty"`
+	// Channels reports every channel of a v2 template separately (issue #331): its
+	// name, the host it runs on and the handle that drives it. Empty for a template
+	// with a single channel, whose handle is ShellID — the surface a caller that never
+	// asked about channels keeps reading.
+	Channels []ChannelStatus `json:"channels,omitempty"`
 	Forwards []ForwardStatus `json:"forwards,omitempty"`
 	Failures []Failure       `json:"failures,omitempty"`
 	// NextRetry is when the reconciler tries again (Unix ms); 0 = no retry
@@ -128,6 +142,47 @@ type Status struct {
 	// Targets reports the per-host breakdown when the extension declares multiple
 	// targets. Omitted on single-target templates so the wire format stays small.
 	Targets []TargetStatus `json:"targets,omitempty"`
+
+	// LastActiveAt is when anything last asked for or drove this extension (Unix ms);
+	// 0 = never. Reported for every extension, not only the lazy ones whose idle timer
+	// needed it: "when was this last used" is how a caller separates an unused instance
+	// from a broken one.
+	LastActiveAt int64 `json:"last_active_at,omitempty"`
+	// Restarts counts the times this extension CAME BACK UP after going down, in this
+	// process. A large number is a fact about the target (a flapping tunnel, a program
+	// that exits on start), and it is not derivable from `failures` — those are capped
+	// and only record the most recent few.
+	Restarts int `json:"restarts,omitempty"`
+	// Liveness is a MEASUREMENT, not the status string (issue #325): the process was
+	// looked at just now. `status` is the reconciler's belief, which is what a caller
+	// cannot tell apart from "the channel died and nothing noticed yet".
+	Liveness *Liveness `json:"liveness,omitempty"`
+}
+
+// Liveness is the answer to "is the process actually there", taken from the transport
+// rather than from a stored status string (issue #325).
+//
+// THE PID IS REPORTED ONLY WHEN SOMETHING REALLY KNOWS IT. A channel runs on the
+// target host over SSH, and SSH has no place in the protocol for "the pid of the
+// process I just started" — so inventing one (or worse, reporting this daemon's own)
+// would be a number a caller can check and find wrong. `pid_unknown` says which host
+// it is running on instead, and `alive` is the fact the caller actually wanted: a pid
+// by itself does not answer "is it still running" without a second, racier query.
+type Liveness struct {
+	// CheckedAt is when this was measured (Unix ms): a probe has a time, a status
+	// string does not, and a caller comparing two replies needs to know which is newer.
+	CheckedAt int64 `json:"checked_at"`
+	// Alive is read from the channel's own process/transport signal.
+	Alive bool `json:"alive"`
+	// SessionStatus is the parent connection's published status, so "the process is
+	// gone" and "the connection is gone" are distinguishable.
+	SessionStatus string `json:"session_status,omitempty"`
+	// ExitCode is present once the process has exited, so a crash is recognizable.
+	ExitCode *int `json:"exit_code,omitempty"`
+	// Pid and PidUnknown are exclusive: a number when the OS told this daemon, and the
+	// reason when it did not.
+	Pid        int    `json:"pid,omitempty"`
+	PidUnknown string `json:"pid_unknown,omitempty"`
 }
 
 // maxFailures caps the history. Enough to see a pattern, not so much that a
@@ -173,11 +228,10 @@ func NewReconciler(store *Store, sessMgr *session.Manager, msgMgr *message.Manag
 		msgMgr:     msgMgr,
 		sshConfigs: sshConfigs,
 		forwardMgr: forwardMgr,
-		states:     map[string]*extState{},
-		groups:     map[string]*extGroup{},
-		syncs:      make(chan string, 64),
-		revive:     make(chan struct{}, 1),
-		done:       make(chan struct{}),
+
+		syncs:  make(chan string, 64),
+		revive: make(chan struct{}, 1),
+		done:   make(chan struct{}),
 	}
 	if store != nil {
 		// The write names the template, so the runtime does that one and nothing
@@ -216,18 +270,33 @@ func (r *Reconciler) SSHConfigs() *sshconfig.Store { return r.sshConfigs }
 // SetOnChange subscribes to status transitions (the Web UI's panel and its push
 // frames). The callback fires after the state has been written, so a reader sees
 // what it is being told about.
+// SetWatched installs the "somebody is listening" predicate: a watched extension is
+// never reaped, however long it stays quiet.
+//
+// WHY THIS EXISTS. An idle window answers "does anybody still need this process" with
+// "nobody has asked recently", and asking means a request. An event-only peer breaks that
+// equation: its normal state IS silence, and the party that needs it never sends a
+// request — it waits to be told something. No keepalive counts as use either, so a
+// subscriber could watch a healthy peer and have it reaped between two events, with
+// nothing said to the subscriber.
+//
+// A predicate rather than a count, so the reconciler keeps knowing nothing about MCP
+// sessions: the layer that owns subscriptions decides what "watched" means.
+func (r *Reconciler) SetWatched(fn func(name string) bool) {
+	if fn == nil {
+		r.watched.Store(nil)
+		return
+	}
+	r.watched.Store(&fn)
+}
+
 func (r *Reconciler) SetOnChange(fn func()) {
-	r.mu.Lock()
-	r.onChange = fn
-	r.mu.Unlock()
+	r.onChange.Store(&fn)
 }
 
 func (r *Reconciler) notifyChange() {
-	r.mu.Lock()
-	fn := r.onChange
-	r.mu.Unlock()
-	if fn != nil {
-		fn()
+	if p := r.onChange.Load(); p != nil && *p != nil {
+		(*p)()
 	}
 }
 
@@ -235,31 +304,30 @@ func (r *Reconciler) notifyChange() {
 // only for a store that cannot be walked: one broken extension is reported in
 // its own status, not as a failure to start the reconciler.
 func (r *Reconciler) Start(ctx context.Context) error {
-	r.mu.Lock()
-	if r.cancel != nil {
-		r.mu.Unlock()
+	cctx, cancel := context.WithCancel(ctx)
+	if !r.cancel.CompareAndSwap(nil, &cancel) {
+		cancel()
 		return nil
 	}
-	cctx, cancel := context.WithCancel(ctx)
-	r.cancel = cancel
-	r.mu.Unlock()
 	if _, err := r.store.List(); err != nil {
-		r.mu.Lock()
-		r.cancel = nil
-		r.mu.Unlock()
+		r.cancel.Store(nil)
 		cancel()
 		return err
 	}
-	r.sweepRestored()
 	go r.run(cctx)
 	return nil
 }
 
-// sweepRestored removes what a previous process left behind. An extension's
+// SweepRestored removes what a previous process left behind. An extension's
 // session serves the run that created it: this process builds its own from the
 // templates, so a restored placeholder — a connection nothing can be driven
 // through — is dropped rather than kept as an entry that can never be reopened.
-func (r *Reconciler) sweepRestored() {
+//
+// It is EXPORTED and no longer called from Start: the session restore moved to the
+// background (issue #353), so at the moment Start runs there are no restored
+// sessions to sweep yet. core calls this after the restore finishes, which is the
+// first moment there is anything to drop.
+func (r *Reconciler) SweepRestored() {
 	if r.sessMgr == nil {
 		return
 	}
@@ -276,14 +344,11 @@ func (r *Reconciler) sweepRestored() {
 // ordinary sessions, and their own teardown follows process exit or the caller's
 // shutdown.
 func (r *Reconciler) Stop() {
-	r.mu.Lock()
-	cancel := r.cancel
-	r.cancel = nil
-	r.mu.Unlock()
-	if cancel == nil {
+	p := r.cancel.Swap(nil)
+	if p == nil || *p == nil {
 		return
 	}
-	cancel()
+	(*p)()
 	<-r.done
 	r.probes.Wait()
 }
@@ -359,24 +424,53 @@ func (r *Reconciler) rebuildable(ext *Extension) bool {
 // the reconciler and one created by hand from the same profile are the same
 // session.
 func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
+	return r.resolveChannel(ext, ext.EffectiveChannels(), "")
+}
+
+// resolveChannel builds the plan for ONE channel of a template (issue #331).
+//
+// `chs` is the effective channel list and `name` picks from it; an empty name means
+// the default channel, which is what every pre-v2 caller asks for. The connection is
+// chosen per channel: a stdio or pty channel is carried by the host its process runs
+// on, an http channel by the loopback connection (its target only says where the
+// relay's requests leave from), and a template with no channel at all still needs the
+// plan for its connection — a file window, a card that is only forwards.
+func (r *Reconciler) resolveChannel(ext *Extension, chs []Channel, channelName string) (hostPlan, error) {
 	if r.sshConfigs == nil {
 		return hostPlan{}, errors.New("no ssh config store configured")
 	}
-	ent, err := r.sshConfigs.Load(ext.Target)
+	extName := strings.TrimSpace(ext.Target)
+	ch := Channel{}
+	isDefault := true
+	if len(chs) > 0 {
+		c, ok := pickChannel(chs, channelName)
+		if !ok {
+			return hostPlan{}, fmt.Errorf("no channel named %q (the channels are %s)", channelName, strings.Join(channelNameList(chs), ", "))
+		}
+		ch, isDefault = c, c.Default
+	}
+	// WHICH PROFILE THIS CHANNEL'S CONNECTION DIALS. A url channel dials the loopback
+	// connection and names its real host as `--via`; everything else dials the host it
+	// runs on.
+	dialHost := extName
+	if ch.Kind != "" {
+		dialHost = ch.DialHost(extName)
+	}
+	ent, err := r.sshConfigs.Load(dialHost)
 	if err != nil {
 		if errors.Is(err, sshconfig.ErrNotFound) {
-			return hostPlan{}, fmt.Errorf("target profile %q does not exist", ext.Target)
+			return hostPlan{}, fmt.Errorf("target profile %q does not exist", dialHost)
 		}
-		return hostPlan{}, fmt.Errorf("cannot read target profile %q: %w", ext.Target, err)
+		return hostPlan{}, fmt.Errorf("cannot read target profile %q: %w", dialHost, err)
 	}
 	if ent.Kind == sshconfig.KindInternal && r.NoInternal {
-		return hostPlan{}, fmt.Errorf("target profile %q is the built-in loopback profile, which is disabled", ext.Target)
+		return hostPlan{}, fmt.Errorf("target profile %q is the built-in loopback profile, which is disabled", dialHost)
 	}
 	var remote *session.RemoteSSH
 	if ent.Kind != sshconfig.KindInternal {
-		remote, err = sshconfig.RemoteFromEntry(ent, r.sshConfigs.ConfigDir(ext.Target))
+		remote, err = sshconfig.RemoteFromEntry(ent, r.sshConfigs.ConfigDir(dialHost))
 		if err != nil {
-			return hostPlan{}, fmt.Errorf("target profile %q: %w", ext.Target, err)
+			return hostPlan{}, fmt.Errorf("target profile %q: %w", dialHost, err)
 		}
 	}
 	restriction, err := session.NewRestriction(ext.Allow, ext.Paths)
@@ -384,7 +478,7 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 		return hostPlan{}, fmt.Errorf("restriction: %w", err)
 	}
 
-	cmd, args := sshconfig.EffectiveCommand(ent, ext.Command, ext.Args)
+	cmd, args := sshconfig.EffectiveCommand(ent, ch.Command, ch.Args)
 	// THE TARGET OF A url TEMPLATE IS THE MACHINE THE CONNECTION LEAVES FROM (#233).
 	// It is not where the process runs: what runs on the channel is termcp's own
 	// bridge, an in-process command only the built-in loopback server knows. So the
@@ -396,15 +490,15 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 	// connection to somewhere else. What changes is only which machine CARRIES the
 	// channel.
 	bridgeVia := ""
-	if ext.URL != "" && !sshconfig.IsInternalName(ext.Target) {
-		bridgeVia = ext.Target
+	if ch.Kind == ChannelHTTP && !sshconfig.IsInternalName(dialHost) {
+		bridgeVia = dialHost
 	}
 	// A url TEMPLATE'S SESSION IS ALWAYS THE LOOPBACK ONE, because the thing that
 	// runs on its channel is termcp's built-in relay and nothing else serves it.
 	// The far host travels as `--via` instead, so the session is not "where the
 	// process is" but "where the relay stands" — which is this machine.
-	sessionHost := ext.Target
-	if ext.URL != "" {
+	sessionHost := dialHost
+	if ch.Kind == ChannelHTTP {
 		sessionHost = "internal"
 		switch {
 		case r.NoInternal:
@@ -418,10 +512,13 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 		default:
 			// target = "internal" with a url: the loopback entry already loaded above.
 		}
-		cmd, args = bridgeCommand(ext, bridgeVia)
+		cmd, args = bridgeCommand(ext, ch, bridgeVia)
 	}
-	mode := sshconfig.EffectiveMode(ent, ext.Mode)
-	rows, cols := ext.Rows, ext.Cols
+	mode := sshconfig.EffectiveMode(ent, ch.Mode)
+	rows, cols := ch.Rows, ch.Cols
+	if len(chs) == 0 {
+		rows, cols = ext.Rows, ext.Cols
+	}
 	if rows == 0 {
 		rows = 24
 	}
@@ -457,10 +554,10 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 			Restriction: restriction,
 			Namespace:   name,
 		},
-		channel: ext.Name,
+		channel: ch.Label(ext.Name, isDefault),
 		command: cmd,
 		args:    args,
-		shell:   ext.Mode != "",
+		shell:   chMode(ch) != "",
 		pty:     mode == "pty",
 		rows:    rows,
 		cols:    cols,
@@ -474,13 +571,21 @@ func (r *Reconciler) resolve(ext *Extension) (hostPlan, error) {
 //
 // via names the machine the connection leaves from; empty means this one, which
 // is what `target = "internal"` says (#233).
-func bridgeCommand(ext *Extension, via string) (string, []string) {
-	args := []string{ext.URL}
+func bridgeCommand(ext *Extension, ch Channel, via string) (string, []string) {
+	url := ch.URL
+	if url == "" {
+		url = ext.URL
+	}
+	headers := ch.Headers
+	if headers == nil {
+		headers = ext.Headers
+	}
+	args := []string{url}
 	if via != "" {
 		args = append(args, "--via", via)
 	}
-	for _, name := range sortedKeys(ext.Headers) {
-		args = append(args, "--header", name+"="+ext.Headers[name])
+	for _, name := range sortedKeys(headers) {
+		args = append(args, "--header", name+"="+headers[name])
 	}
 	return mcpbridge.BuiltinCommand, args
 }
@@ -511,6 +616,29 @@ type TargetStatus struct {
 
 // Status reports the runtime state of one extension. ok is false for a name the
 // store does not hold.
+// livenessOf measures one state's process, using the reconciler's own managers.
+//
+// NIL WHEN THERE IS NOTHING TO MEASURE WITH: a Reconciler built without a session
+// manager (a unit test, a read-only harness) has no channels, and a probe that reported
+// "not alive" for every one of them would be an answer about the harness, not about the
+// extension.
+func (r *Reconciler) livenessOf(st *extState) *Liveness {
+	if r.sessMgr == nil {
+		return nil
+	}
+	return st.probeLiveness(
+		func(shellID string) *session.ChildShell { return r.sessMgr.GetChildShell(shellID) },
+		func(sessionID string) string {
+			if sessionID == "" {
+				return ""
+			}
+			if sess := r.sessMgr.Get(sessionID); sess != nil {
+				return string(sess.Info().Status)
+			}
+			return ""
+		})
+}
+
 func (r *Reconciler) Status(name string) (Status, bool) {
 	// ONE STAT, NOT A DIRECTORY LISTING. This used to call store.List() — a ReadDir
 	// plus a Stat per entry — to answer "is this name configured", so a caller
@@ -550,10 +678,13 @@ func (r *Reconciler) statusOf(name string, ext *Extension) Status {
 	if len(parts) == 1 {
 		out := parts[0]
 		out.Lazy = ext.Lazy()
+		out.Channels = r.channelStatuses(ext, r.stateFor(name, targets[0].Host))
+		out.Liveness = r.livenessOf(r.stateFor(name, targets[0].Host))
 		return out
 	}
 	out := foldStatus(parts)
 	out.Lazy = ext.Lazy()
+	out.Channels = r.channelStatuses(ext, r.stateFor(name, targets[0].Host))
 	for i, t := range targets {
 		row := TargetStatus{
 			Target:          t.Host,
@@ -638,7 +769,9 @@ func (r *Reconciler) TargetStatus(name, target string) (Status, bool) {
 	}
 	st := r.stateFor(name, t.Host)
 	r.reapEnded(name, st)
-	return st.snapshot(), true
+	out := st.snapshot()
+	out.Liveness = r.livenessOf(st)
+	return out, true
 }
 
 // List reports every extension's runtime state, sorted the way the store sorts
@@ -685,8 +818,10 @@ func (r *Reconciler) RetryTarget(name, target string) error {
 		return err
 	}
 	st.want()
-	r.detach(st)
-	st.mark(StatusUnavailable)
+	// THE PROBE REUSES WHAT STILL WORKS (#322). Detaching here closed the extension's
+	// channel and its tunnels before the probe could ask, so a retry of a healthy target
+	// killed the process it was about to find and threw away the transcript that explained
+	// the first failure. The probe archives an exited channel itself.
 	st.resetRetryBudget()
 	r.retryTargetNow(name, ext.Target)
 	return nil
@@ -735,43 +870,29 @@ func (r *Reconciler) retryTargetNow(name, target string) {
 
 // backoffPending reports how much of the current backoff window is left.
 func (st *extState) backoffPending() (time.Duration, bool) {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if st.readyAt.IsZero() {
+	d := st.load()
+	if d.readyAt.IsZero() {
 		return 0, false
 	}
-	return time.Until(st.readyAt), true
+	return time.Until(d.readyAt), true
 }
 
-// runCtx is the reconciler's run context, or nil before Start.
-func (r *Reconciler) runCtx() context.Context {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.ctx
+// runContext returns the reconciler's run context, or nil before Start.
+func (r *Reconciler) runContext() context.Context {
+	if p := r.runCtx.Load(); p != nil {
+		return *p
+	}
+	return nil
 }
 
 // runContext is the run this state belongs to, for calls that start an attempt.
-func (st *extState) runContext() context.Context {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.ctx
-}
+func (st *extState) runContext() context.Context { return st.load().ctx }
 
-// name is the extension this state is filed under, needed by the timers that have
-// to look the template up again when they fire.
-func (st *extState) name() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.extName
-}
+// name is the extension this state is filed under: identity, written once.
+func (st *extState) name() string { return st.extName }
 
-// host is the target this state runs on, so a timer can reload the template and
-// project it onto the same host it was armed for.
-func (st *extState) host() string {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	return st.target
-}
+// host is the target this state runs on: identity, written once.
+func (st *extState) host() string { return st.target }
 
 // forTarget projects a template onto one of its hosts: the fields the whole
 // extension shares, with Target and Forwards taken from that host's own entry.
@@ -844,14 +965,13 @@ func (r *Reconciler) stateFor(name, target string) *extState {
 		}
 	}
 	key := stateKey(name, target)
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if st, ok := r.states[key]; ok {
-		return st
+	if v, ok := r.states.Load(key); ok {
+		return v.(*extState)
 	}
-	st := &extState{status: StatusUnavailable, autoRetry: true, extName: name, target: target}
-	r.states[key] = st
-	return st
+	st := &extState{extName: name, target: target}
+	st.data.Store(&extStateData{status: StatusUnavailable, autoRetry: true})
+	actual, _ := r.states.LoadOrStore(key, st)
+	return actual.(*extState)
 }
 
 // statesNamed returns every state filed under one extension name, in the order

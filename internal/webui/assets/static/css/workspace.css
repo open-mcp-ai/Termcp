@@ -641,6 +641,30 @@
 .node-status.is-connecting { color: var(--warning); }
 .node-status.is-offline { color: var(--danger); }
 .node-addr { margin-top: 3px; font: 400 .66rem var(--font-mono); color: var(--text-muted); overflow-wrap: anywhere; }
+/* The line that stands where an address would be, on a card whose key is not
+   loaded or whose host is not activated.
+ *
+ * As a bare <button> this wore the browser's own chrome — a centred, bordered box
+ * two lines tall, the loudest thing on a card whose whole message is "nothing to
+ * show here". The state is a caption, not a control: one line, glyph first, three
+ * words, and the sentence the click actually prints kept in the tooltip. It still
+ * looks pressable because it is, so the cursor and the hover say so. */
+.node-addr.is-locked {
+  display: inline-flex; align-items: center; gap: 4px;
+  /* It sits on the protocol row, pushed to the right edge: `margin-left: auto` is
+     what makes the empty half of that row its home, and `margin-top: 0` undoes the
+     address line's own offset. */
+  margin: 0 0 0 auto; min-width: 0; padding: 1px 0;
+  border: 0; background: none;
+  font: 600 .64rem var(--font-mono); letter-spacing: .04em; text-align: left;
+  color: var(--text-secondary); cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: color .14s ease;
+}
+.node-addr.is-locked svg { flex: 0 0 auto; opacity: .85; }
+.node-addr.is-locked:hover, .node-addr.is-locked:focus-visible { color: var(--accent); }
+.node-addr.is-locked:hover svg, .node-addr.is-locked:focus-visible svg { opacity: 1; }
+.node-addr.is-locked:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .conn-tile.node-card .node-sess { margin-top: 3px; font: 600 .62rem var(--font-mono); letter-spacing: .06em; color: var(--text-secondary); }
 .conn-tile.node-card.node-focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-ring); }
 
@@ -1248,7 +1272,9 @@
  * Shared by the archive's rows and the extension plate's cards, because they are
  * the same control in the same role and two sets of rules would drift. */
 .archive-row-tick,
-.ext-card-tick {
+.ext-card-tick,
+.cs-key-tick,
+.cs-tick-all {
   appearance: none; -webkit-appearance: none;
   flex: 0 0 auto; margin: 0;
   width: 15px; height: 15px; padding: 0;
@@ -1261,7 +1287,9 @@
 /* The tick itself: a rotated L, drawn with two borders. `scale(0)` keeps the shape
    ready and only the transition moves, so the mark does not redraw mid-animation. */
 .archive-row-tick::before,
-.ext-card-tick::before {
+.ext-card-tick::before,
+.cs-key-tick::before,
+.cs-tick-all::before {
   content: '';
   width: 7px; height: 4px;
   border: 2px solid currentColor; border-top: 0; border-right: 0;
@@ -1269,15 +1297,31 @@
   transition: transform .12s ease;
 }
 .archive-row-tick:checked,
-.ext-card-tick:checked {
+.ext-card-tick:checked,
+.cs-key-tick:checked,
+.cs-tick-all:checked {
   background: var(--accent); border-color: var(--accent);
 }
 .archive-row-tick:checked::before,
-.ext-card-tick:checked::before { transform: rotate(-45deg) scale(1) translateY(-1px); }
+.ext-card-tick:checked::before,
+.cs-key-tick:checked::before,
+.cs-tick-all:checked::before { transform: rotate(-45deg) scale(1) translateY(-1px); }
 .archive-row-tick:hover,
-.ext-card-tick:hover { border-color: var(--accent-border); }
+.ext-card-tick:hover,
+.cs-key-tick:hover,
+.cs-tick-all:hover { border-color: var(--accent-border); }
 .archive-row-tick:focus-visible,
-.ext-card-tick:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ext-card-tick:focus-visible,
+.cs-key-tick:focus-visible,
+.cs-tick-all:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* Indeterminate is a third state the shared tick needs here: "some of the visible
+   keys are ticked" is not the same answer as either box. It is a dash, drawn the
+   same way the tick is. */
+.cs-tick-all:indeterminate::before {
+  width: 7px; height: 0;
+  border: 1px solid currentColor; border-top: 0; border-right: 0; border-left: 0;
+  transform: none;
+}
 /* Where it sits on a row: aligned with the name's baseline block rather than the
    row's centre, because the row is two lines tall and a centred box floats between
    them. */
@@ -1594,6 +1638,20 @@
 }
 .drawer-add-row .drawer-add-grow { flex: 1 1 0; min-width: 0; margin: 0; }
 .drawer-add-row .drawer-import { flex: 0 0 44px; margin: 0; }
+/* The masking eye is the third key in the same row: 40px so it reads as a view
+   control beside the two entry points, not a third way to add a host. Its two
+   glyphs swap by state (`aria-pressed`), which is why only one is ever laid out. */
+.drawer-add-row .drawer-mask { flex: 0 0 40px; margin: 0; }
+/* One glyph at a time. `aria-pressed` is the single source of the state, so the
+   rule below is the only place the swap is decided. The glyph names the ACTION,
+   like the label beside it ("Show addresses" while masked): an open eye offers to
+   reveal, the struck eye offers to hide. That is why pressed — visible — shows the
+   struck eye. */
+.drawer-mask .eye-open { display: block; }
+.drawer-mask .eye-closed { display: none; }
+.drawer-mask[aria-pressed="true"] .eye-open { display: none; }
+.drawer-mask[aria-pressed="true"] .eye-closed { display: block; }
+.drawer-mask[aria-pressed="true"] { border-style: solid; color: var(--accent); }
 .drawer-add {
   flex: 0 0 auto; align-self: stretch; height: 40px; margin: 10px 10px 0;
   padding: 0; display: flex; align-items: center; justify-content: center; gap: 7px;
@@ -1837,6 +1895,21 @@
 .batch-open-main { flex: 1 1 auto; min-width: 0; padding: 0 10px; gap: 8px; }
 .batch-open-caret { flex: 0 0 22px; border-left: 1px solid var(--border-subtle); }
 .nethub-open-plate button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+/* One tick, one flash of the verb. In select mode the plate is where the batch
+   action lives, but it sits at the row's right end while the eye is on the card
+   just ticked, so each tick answers once: the border and glyphs take the accent
+   (the same colour the pressed switch wears) and a ring expands out of the plate
+   and fades. batch-bar.js re-adds the class per tick, which is what restarts it. */
+.nethub-open-plate.is-ticking { animation: nethubPlateTick .4s ease-out; }
+.nethub-open-plate.is-ticking button { animation: nethubPlateGlyphTick .4s ease-out; }
+@keyframes nethubPlateTick {
+  from { border-color: var(--accent); box-shadow: 0 0 0 0 var(--accent); }
+  to { border-color: var(--border-strong); box-shadow: 0 0 0 7px transparent; }
+}
+@keyframes nethubPlateGlyphTick {
+  from { color: var(--accent); }
+  to { color: var(--text-secondary); }
+}
 /* There is deliberately no nethubKeyIn keyframe here. The companions fade in as
    the switch shuts and fade out as it opens again, but that motion is a
    `transition` on the rules above — the keyframe it replaced was attached to the

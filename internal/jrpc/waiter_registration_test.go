@@ -2,7 +2,6 @@ package jrpc
 
 import (
 	"context"
-	"sync"
 	"testing"
 	"time"
 )
@@ -25,7 +24,6 @@ import (
 // nobody.
 func TestTheWaiterIsRegisteredBeforeTheFrameGoesOut(t *testing.T) {
 	c := &Channel{
-		wait:    map[string]chan Framed{},
 		done:    make(chan struct{}),
 		dead:    make(chan struct{}),
 		readErr: make(chan error, 1),
@@ -33,9 +31,7 @@ func TestTheWaiterIsRegisteredBeforeTheFrameGoesOut(t *testing.T) {
 
 	sawWaiter := false
 	send := func() error {
-		c.waitMu.Lock()
-		sawWaiter = len(c.wait) == 1
-		c.waitMu.Unlock()
+		_, sawWaiter = c.wait.Load("0")
 		// The peer answers as fast as it can, which is the situation the order exists
 		// for: the frame goes to the waiter that is already registered.
 		go func() { c.dispatch(Framed{N: 1, Data: `{"id":0,"result":{"echo":"early"}}`}) }()
@@ -62,18 +58,20 @@ func TestTheWaiterIsRegisteredBeforeTheFrameGoesOut(t *testing.T) {
 // not turn that case into a loss.
 func TestAnAnswerWithNoWaiterIsStillBuffered(t *testing.T) {
 	c := &Channel{
-		wait:    map[string]chan Framed{},
 		done:    make(chan struct{}),
 		dead:    make(chan struct{}),
 		readErr: make(chan error, 1),
 	}
-	c.evCond = sync.NewCond(&c.evMu)
-
+	// A LITERAL Channel HAS NO WAKE GENERATION, and buffer/wakeAll handles that:
+	// Swap returns nil and nothing is closed. This test only reads the backlog, so
+	// the missing generation is not on its path.
 	c.dispatch(Framed{N: 1, Data: `{"id":7,"result":{"late":true}}`})
 
-	c.evMu.Lock()
-	defer c.evMu.Unlock()
-	if len(c.ev) != 1 {
-		t.Fatalf("an answer with no waiter was dropped: ev holds %d frames, want 1", len(c.ev))
+	backlog := 0
+	if p := c.ev.Load(); p != nil {
+		backlog = len(*p)
+	}
+	if backlog != 1 {
+		t.Fatalf("an answer with no waiter was dropped: ev holds %d frames, want 1", backlog)
 	}
 }

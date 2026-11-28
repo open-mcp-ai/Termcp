@@ -102,35 +102,67 @@ func TestDocsAssetsExist(t *testing.T) {
 	}
 }
 
-// TestNoResourceCapability pins the decision that resources are gone.
+// TestOnlyGuideResourcesAreServed pins what the resources surface IS (#355).
 //
-// MCP used to publish api.md as a resource. With one tool whose argument is a
-// command line that describes itself, a client has nothing to list: it sends
-// `help`, it does not read the REST endpoint table. Claiming the capability while
-// listing nothing would be worse than not claiming it -- a client that branches on
-// the capability would be sent down a path with no content behind it.
-func TestNoResourceCapability(t *testing.T) {
+// It used to be nothing: api.md was published as a resource, then removed, on the
+// argument that a client reading a REST endpoint table had the wrong idea about this
+// server. That argument still holds for api.md and for every other document — and it
+// does not hold for the one thing an AGENT cannot derive: the material a person needs
+// in order to use the machine, which is what `guide` publishes so a model can hand it
+// over verbatim.
+//
+// So the capability is advertised EXACTLY WHEN the guide is registered, the namespace
+// is exactly termcp://guide/*, and nothing else — no templates, no subscribe — can be
+// reached. A client that branches on `resources` gets a list it can actually read.
+func TestOnlyGuideResourcesAreServed(t *testing.T) {
 	s := docsTestServer(t)
 
-	// The capability must not be advertised at initialize. Asserted on the
-	// protocol reply rather than on a server getter: what a client branches on is
-	// the JSON it received.
+	// The capability must be advertised: the handlers exist, and a client that would
+	// have offered the material to a person must not be told there is none.
 	var init struct {
 		Capabilities map[string]json.RawMessage `json:"capabilities"`
 	}
 	if err := json.Unmarshal(callMCP(t, s, "initialize", nil), &init); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := init.Capabilities["resources"]; ok {
-		t.Error("initialize advertises a resources capability but no resources are served")
+	if _, ok := init.Capabilities["resources"]; !ok {
+		t.Fatal("initialize does not advertise resources, but guide publishes them")
+	}
+	// Subscribe is NOT claimed: nothing here can push an update, and a client that
+	// subscribes would wait for ever.
+	if raw := string(init.Capabilities["resources"]); strings.Contains(raw, "subscribe") {
+		t.Errorf("resources capability claims subscribe, which has no producer: %s", raw)
 	}
 
-	// And a listing, if a client asks anyway, is refused by the protocol layer
-	// rather than answered with an empty list: an empty list says "this server has
-	// no docs", a refusal says "this server does not do resources".
-	_, errMsg := dispatchMCPErr(t, s, context.Background(), map[string]any{"jsonrpc": "2.0", "id": 1, "method": "resources/list"})
+	// The listing is the guide namespace and nothing else.
+	raw := callMCP(t, s, "resources/list", map[string]any{})
+	var listed struct {
+		Resources []struct {
+			URI  string `json:"uri"`
+			Name string `json:"name"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(raw, &listed); err != nil {
+		t.Fatalf("resources/list: %v (%s)", err, raw)
+	}
+	if len(listed.Resources) == 0 {
+		t.Fatal("resources/list is empty; the guide must be published")
+	}
+	for _, r := range listed.Resources {
+		if !strings.HasPrefix(r.URI, "termcp://guide/") {
+			t.Errorf("resources/list publishes %q, which is outside the guide namespace", r.URI)
+		}
+	}
+
+	// A URI outside the namespace is refused BY NAME rather than answered with an
+	// empty document: "this server does not have that" and "that document is empty"
+	// are different facts.
+	_, errMsg := dispatchMCPErr(t, s, context.Background(), map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "resources/read",
+		"params": map[string]any{"uri": "file:///etc/passwd"},
+	})
 	if errMsg == "" {
-		t.Error("resources/list must be refused now that no resources are served")
+		t.Error("resources/read must refuse a URI outside termcp://guide/")
 	}
 }
 
@@ -396,15 +428,36 @@ func TestToolListingCarriesInstanceAddress(t *testing.T) {
 	const origin = "http://10.1.2.3:18994"
 	s := New(nil, nil, nil, nil, "test")
 
-	// There is one tool, so "only this one carries the address" is checked as
-	// "exactly one tool, and it carries it": the decoration must not spread.
+	// The decoration must not spread: `term` carries the address, and the other
+	// entries (`guide`) do not. That is checked by NAME rather than by count, because
+	// the count is the thing that changes when a surface is added — and this test is
+	// about WHERE the address rides, not about how many tools exist.
 	tools := listTools(t, s, originContext(origin))
-	if len(tools) != 1 {
-		t.Fatalf("%d tools; the surface is one entry", len(tools))
+	term := toolNamed(t, tools, termToolName)
+	if !strings.Contains(term.Description, origin) {
+		t.Errorf("the %s description misses the address %q:\n%s", term.Name, origin, term.Description)
 	}
-	if !strings.Contains(tools[0].Description, origin) {
-		t.Errorf("the %s description misses the address %q:\n%s", tools[0].Name, origin, tools[0].Description)
+	for _, other := range tools {
+		if other.Name == termToolName {
+			continue
+		}
+		if strings.Contains(other.Description, origin) {
+			t.Errorf("the %s description carries the instance address; only %s owns it", other.Name, termToolName)
+		}
 	}
+}
+
+// toolNamed finds one entry of a listing, failing when it is absent: a test that
+// silently read tools[0] would pass while checking the wrong tool.
+func toolNamed(t *testing.T, tools []mcp.Tool, name string) mcp.Tool {
+	t.Helper()
+	for _, tool := range tools {
+		if tool.Name == name {
+			return tool
+		}
+	}
+	t.Fatalf("%q is not in the listing", name)
+	return mcp.Tool{}
 }
 
 // The decoration must be computed per request and never accumulate: repeated
@@ -413,10 +466,7 @@ func TestToolListingAddressIsPerRequestAndNotAccumulated(t *testing.T) {
 	s := New(nil, nil, nil, nil, "test")
 	for _, origin := range []string{"http://a.example:1", "http://b.example:2", "http://a.example:1"} {
 		tools := listTools(t, s, originContext(origin))
-		if len(tools) != 1 {
-			t.Fatalf("%d tools", len(tools))
-		}
-		desc := tools[0].Description
+		desc := toolNamed(t, tools, termToolName).Description
 		if n := strings.Count(desc, "This instance's Web UI:"); n != 1 {
 			t.Fatalf("address appended %d times for %s:\n%s", n, origin, desc)
 		}
@@ -441,14 +491,10 @@ func TestToolListingFallsBackToBindAddress(t *testing.T) {
 	}
 }
 
-// termDescriptionFor is the single tool's description as the model receives it.
+// termDescriptionFor is the `term` description as the model receives it.
 func termDescriptionFor(t *testing.T, s *Server, ctx context.Context) string {
 	t.Helper()
-	tools := listTools(t, s, ctx)
-	if len(tools) != 1 {
-		t.Fatalf("%d tools; the surface is one entry", len(tools))
-	}
-	return tools[0].Description
+	return toolNamed(t, listTools(t, s, ctx), termToolName).Description
 }
 
 // No address at all (no host to answer, no bind address yet) must leave the
@@ -799,7 +845,7 @@ func TestLearnAPIPromptFollowsRequestOrigin(t *testing.T) {
 func TestInstructionsExplainActionWhenTermcpFeelsAwkward(t *testing.T) {
 	for _, want := range []string{
 		"Long, awkward", "missing a capability", "say what you are trying to do and ask",
-		"create ext", "open <session> mcp <url>", "call <peer> <tool>",
+		"create ext", "open <session> mcp <url>", "mcp:<n> tools", "mcp:<n> <tool>",
 	} {
 		if !strings.Contains(mcpServerInstructions, want) {
 			t.Errorf("initialize instructions miss high-level action or escalation path %q:\n%s", want, mcpServerInstructions)

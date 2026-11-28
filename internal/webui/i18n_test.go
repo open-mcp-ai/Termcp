@@ -330,6 +330,39 @@ func TestLanguageSelectorIsWired(t *testing.T) {
 // grow a whitelist longer than the code. Run it with:
 //
 //	go test ./internal/webui/ -run TestUntranslatedAudit -v
+/* A Chinese catalog whose value is an English sentence is a hole in the UI: the
+ * key parity tests cannot see it (the key exists) and the audit above only logs.
+ * This one fails. It compares against the English catalog and requires CJK in
+ * values that look like prose; protocol names and deliberate brand strings are
+ * whitelisted explicitly, so the list cannot quietly grow.
+ *
+ * Mutation check: reverting storage.enableMachine to English fails this test. */
+func TestChineseCatalogsHaveNoEnglishSentences(t *testing.T) {
+	// Values that are correct as-is: protocols, shell terms, deliberate marks.
+	whitelist := map[string]bool{
+		"ext.inscription.a":         true, // deliberate brand mark
+		"ext.status.shell":          true, // "Shell" is the term of art
+		"modal.forward.dir.dynamic": true, // SOCKS5 (ssh -D) is a protocol spelling
+	}
+	cat := loadCatalogs(t)
+	en := cat["en"]
+	for _, lang := range []string{"zh-Hans", "zh-Hant"} {
+		for key, value := range cat[lang] {
+			if whitelist[key] {
+				continue
+			}
+			// Placeholders carry English identifiers ({msg}, {from}) that say
+			// nothing about the language: strip them before judging the value.
+			stripped := regexp.MustCompile(`\{[^}]*\}`).ReplaceAllString(value, "")
+			looksEnglish := strings.Contains(stripped, " ") && regexp.MustCompile(`[A-Za-z]{3,}`).MatchString(stripped)
+			proseEnglish := looksEnglish && value == en[key]
+			if (proseEnglish || !strings.ContainsFunc(value, func(r rune) bool { return r >= 0x4e00 && r <= 0x9fff })) && looksEnglish {
+				t.Errorf("%s: %q is still English (en: %q)", lang, key, value)
+			}
+		}
+	}
+}
+
 func TestUntranslatedAudit(t *testing.T) {
 	// Capitalised word + space + more text, which is what an English sentence
 	// fragment looks like in this codebase.
@@ -373,4 +406,89 @@ func placeholders(s string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+/* A module that builds markup at load time runs after i18n.js has already made
+ * its single pass over the document, so every data-i18n attribute it wrote stays
+ * in the catalog's source language. That is how the encryption dialog ended up
+ * half translated: its status line (drawn with t()) in Chinese while its title,
+ * labels and buttons stayed English. A load-time injection carrying data-i18n
+ * has to apply the translations itself.
+ *
+ * Mutation check: removing the applyI18n call after config-storage.js builds its
+ * modal fails this test.
+ */
+func TestLoadTimeMarkupAppliesItsOwnTranslations(t *testing.T) {
+	// Top-level assignment: the line starts in column 0, which is what makes it
+	// run at load rather than when a dialog opens.
+	topLevel := regexp.MustCompile(`(?m)^[A-Za-z_$][\w$.]*\.innerHTML\s*=\s*[\[` + "`" + `'"]`)
+	for _, f := range jsModules(t) {
+		body := readAssetLF(t, f)
+		for _, loc := range topLevel.FindAllStringIndex(body, -1) {
+			/* The block ends where the array it assigns is joined. A fixed window
+			   was tried first and stopped working the moment a panel grew — the
+			   assertion is about the markup, so it follows the markup. */
+			tail := body[loc[0]:]
+			close := strings.Index(tail, "].join(")
+			if close < 0 {
+				continue
+			}
+			block := tail[:close]
+			if !strings.Contains(block, "data-i18n") {
+				continue
+			}
+			/* The translation pass follows the assignment, not the markup: what is
+			   checked is that it happens at load time, near the block it fixes. */
+			after := tail[close:]
+			if len(after) > 1500 {
+				after = after[:1500]
+			}
+			if !strings.Contains(after, "applyI18n(") {
+				t.Errorf("%s: builds data-i18n markup at load time without applying translations; those labels render in the source language", f)
+			}
+		}
+	}
+}
+
+/* A module that builds markup while it loads does so AFTER i18n.js's first pass over
+ * the document, so the data-i18n attributes in that markup would keep the English
+ * fallback written beside them — forever, if nothing re-applied the catalog later.
+ *
+ * Something did: a theme's resource fetch calls setI18nThemeCatalog, which re-runs
+ * the catalog over the document. But that is a network race, and it decides the
+ * answer: resolves after the modules insert their markup and the page is translated,
+ * resolves before (a cached theme fits in that window) and it is not. The same build
+ * therefore showed the batch menu as "ENCRYPT SELECTED" under a Chinese page on one
+ * machine and correctly on the next — reported from a screenshot, and reproduced by
+ * removing that accidental pass.
+ *
+ * The last translation has to be a fixed step: one pass once the document has
+ * finished parsing, whatever the theme did in the meantime.
+ */
+func TestMarkupBuiltByAModuleIsTranslated(t *testing.T) {
+	engine := readAssetLF(t, "static/js/i18n.js")
+	if !strings.Contains(engine, "window.addEventListener('load', function () { applyI18n(document); })") {
+		t.Error("nothing re-applies the catalog after the modules have built their markup: " +
+			"their strings keep the English fallback unless a theme's fetch happens to re-render, " +
+			"which is a race and was reported as an untranslated batch menu")
+	}
+
+	// The menu entries that showed it are still built by a module — index.html cannot
+	// translate what it does not author — so this pass has live work to do.
+	panel := readAssetLF(t, "static/js/config-storage.js")
+	for _, id := range []string{
+		`id="nethub-menu-encrypt"`, `id="nethub-menu-restore"`,
+		`id="nethub-menu-activate"`, `id="nethub-menu-deactivate"`,
+	} {
+		if !strings.Contains(panel, id) {
+			t.Fatalf("%s is no longer built by config-storage.js; this test's premise moved", id)
+		}
+	}
+	// And it must not have gone back to translating only its own panel: that pass
+	// runs BEFORE these two inserts, which is how they were missed.
+	if i := strings.Index(panel, "applyI18n(_configStorageRoot)"); i >= 0 {
+		if !strings.Contains(panel[i:], `id="nethub-menu-encrypt"`) {
+			t.Log("note: the panel's own pass still runs before the menu inserts — the load-time pass is what covers them")
+		}
+	}
 }

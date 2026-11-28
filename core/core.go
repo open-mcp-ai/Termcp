@@ -59,6 +59,7 @@ import (
 
 	"github.com/open-mcp-ai/termcp/config"
 	"github.com/open-mcp-ai/termcp/internal/auth"
+	"github.com/open-mcp-ai/termcp/internal/configstore"
 	"github.com/open-mcp-ai/termcp/internal/daemon"
 	"github.com/open-mcp-ai/termcp/internal/extensions"
 	"github.com/open-mcp-ai/termcp/internal/forward"
@@ -137,6 +138,26 @@ type Server struct {
 	// idle watcher — run through Close.
 	stopCh   chan struct{}
 	serveErr chan error
+
+	/* SESSION HISTORY IS RESTORED AFTER THE SURFACES ARE UP (issue #353).
+	 *
+	 * Rebuilding the registry from disk is one manifest read plus one fsync per
+	 * session, and it used to happen in New — before the port was bound. A data dir
+	 * with 58 archived sessions therefore kept the socket closed for seconds, and an
+	 * MCP client whose handshake times out in 8s reported "0 tools" against an
+	 * instance that was merely still reading. The listener is what a client waits
+	 * for; the history behind it can arrive a moment later.
+	 *
+	 * `restoring` is the intermediate state the issue asked for: up, but not yet
+	 * finished reading yesterday. It is reported by GET /api/daemon and in the
+	 * startup log, so "nothing listening" and "serving, still restoring" are
+	 * distinguishable without guessing from elapsed time.
+	 */
+	restoring   atomic.Bool
+	restoreDone chan struct{}
+	// restoreSessions is the work, replaceable so a test can hold it open and
+	// prove the listener does not wait for it.
+	restoreSessions func() error
 }
 
 // New builds an instance and its dependencies, but does not serve. Nothing here
@@ -160,9 +181,10 @@ func New(opts Options) (*Server, error) {
 	}
 	s := &Server{
 		opts: opts, cfg: cfg,
-		stopCh:   make(chan struct{}),
-		serveErr: make(chan error, 1),
-		ready:    make(chan struct{}),
+		stopCh:      make(chan struct{}),
+		serveErr:    make(chan error, 1),
+		ready:       make(chan struct{}),
+		restoreDone: make(chan struct{}),
 	}
 
 	if cfg.AuthToken != "" || cfg.AuthHash != "" {
@@ -182,10 +204,23 @@ func New(opts Options) (*Server, error) {
 	s.store = storage.New(cfg.DataDir)
 	s.msgMgr = message.NewManager(s.store)
 	s.sessMgr = session.NewManager(s.msgMgr, s.store, s.sshSrv)
-	if err := s.sessMgr.RestoreDead(); err != nil {
-		slog.Warn("failed to restore previous DEAD sessions", "err", err)
+	/* NOT RESTORED HERE — see the Server field comment. Start runs this after the
+	   surfaces are up, so the socket is bound before the history is read. */
+	s.restoreSessions = func() error { return s.sessMgr.RestoreDead() }
+	/* The unlock chain, not just a data dir: without it an initialized store opens
+	   locked on every restart and the password is the only way back in — which for
+	   an MCP deployment means the agent cannot connect a host until a human opens
+	   the Web UI. The chain is machine credential store, mounted secret file, then
+	   the environment variable. */
+	sshStore, err := sshconfig.OpenConfiguredStore(cfg.DataDir, configstore.DefaultProviders()...)
+	if err != nil {
+		s.finish()
+		return nil, fmt.Errorf("open ssh configs: %w", err)
 	}
-	s.sshStore = sshconfig.NewStore(cfg.DataDir)
+	s.sshStore = sshStore
+	if warning := sshStore.StartupWarning(); warning != "" {
+		slog.Warn(warning)
+	}
 	s.forwardMgr = forward.NewForwardManager()
 
 	// THE ASSET DIRECTORIES ARE APPLIED HERE, from Config, rather than expected of
@@ -218,6 +253,7 @@ func New(opts Options) (*Server, error) {
 	s.extensions.SetExposeHandler(func() http.Handler { return s.httpSrv.Handler })
 
 	s.mcp = mcpi.New(s.sessMgr, s.msgMgr, s.sshStore, s.forwardMgr, opts.Version)
+	s.mcp.SetDataDir(cfg.DataDir)
 	// The embedded docs feed the `learn-api` prompt. In a no_webui build they are
 	// the only asset left, which is deliberate: an instance that serves an HTTP
 	// API should be able to hand an agent its reference for that API.
@@ -275,7 +311,8 @@ func (s *Server) wireUI() {
 		Sessions: s.sessMgr, MsgMgr: s.msgMgr, SSH: s.sshStore, ForwardMgr: s.forwardMgr,
 		Extensions: s.extensions, NoInternal: cfg.NoInternal, Version: s.opts.Version,
 		Daemon: s.opts.DaemonChild, StartedAt: time.Now().UTC().Format(time.RFC3339),
-		SFTP: s.mcp.SFTPPool(),
+		Restoring: s.Restoring,
+		SFTP:      s.mcp.SFTPPool(),
 	}
 	// The effective countdown is published at GET /api/daemon so the stdio bridge
 	// can ping faster than it (see daemon.InstanceInfo.IdleTimeoutMS).
@@ -410,6 +447,21 @@ func (s *Server) Start() error {
 	}
 	// From here on Term can answer, so this is what "usable" means.
 	close(s.ready)
+
+	// YESTERDAY'S SESSIONS ARRIVE AFTER THE DOOR OPENS (issue #353). The listener is
+	// bound by Listen, which the binary calls immediately after this returns, so
+	// restoring here means a client's handshake never waits for the history — it
+	// waits for a socket, which is milliseconds.
+	//
+	// The flag is raised HERE, not inside the goroutine: a caller that asks straight
+	// after Start must not see "fully loaded" just because the goroutine has not
+	// been scheduled yet.
+	if s.restoreSessions == nil || s.sessMgr == nil {
+		close(s.restoreDone)
+	} else {
+		s.restoring.Store(true)
+		go s.restoreSessionHistory()
+	}
 
 	if s.opts.DaemonChild {
 		timeout := daemon.DefaultIdleTimeout
@@ -557,6 +609,18 @@ func (s *Server) finish() {
 		return
 	}
 
+	/* The restore writes session manifests, so releasing the store underneath it
+	   would turn a shutdown into a torn write. The wait is BOUNDED for the same
+	   reason the HTTP shutdown below is: a shutdown that can be held open by one
+	   slow reader is not a shutdown, and the store's own Close is the backstop. */
+	if s.restoreDone != nil && s.restoring.Load() {
+		select {
+		case <-s.restoreDone:
+		case <-time.After(5 * time.Second):
+			slog.Warn("session history restore did not finish before shutdown")
+		}
+	}
+
 	if s.extensions != nil {
 		s.extensions.Stop()
 	}
@@ -569,12 +633,63 @@ func (s *Server) finish() {
 	if s.mcp != nil {
 		_ = s.mcp.Stop()
 	}
+	if s.sshStore != nil {
+		if err := s.sshStore.Close(); err != nil {
+			slog.Warn("closing ssh configs store", "err", err)
+		}
+	}
 	if s.store != nil {
 		if err := s.store.Close(); err != nil {
 			slog.Warn("closing output logs", "err", err)
 		}
 	}
 }
+
+/* restoreSessionHistory rebuilds the session registry from disk, off the startup path.
+ *
+ * It is the same work the constructor used to do, moved rather than changed: read
+ * every manifest, force RUNNING records to EXITED (this process holds no SSH
+ * connection, so anything the previous process left running is dead), and persist
+ * the corrected status. What is different is WHEN — the socket is already bound and
+ * answering, which is what issue #353 is about.
+ *
+ * `restoring` is true for the whole of it and is published (GET /api/daemon, the
+ * startup log), so a client can tell "not up yet" from "up, still reading history".
+ * It is one goroutine and it ends; nothing waits on it except Close.
+ */
+func (s *Server) restoreSessionHistory() {
+	if s.restoreDone == nil {
+		return
+	}
+	// Closed once, whichever path arrives first: the restore finishing, or finish
+	// deciding there was nothing to wait for.
+	defer func() {
+		s.restoring.Store(false)
+		select {
+		case <-s.restoreDone:
+		default:
+			close(s.restoreDone)
+		}
+	}()
+	started := time.Now()
+	if err := s.restoreSessions(); err != nil {
+		slog.Warn("failed to restore previous DEAD sessions", "err", err)
+		return
+	}
+	/* The extension reconciler drops restored extension sessions, because a restored
+	   placeholder is a connection nothing can be driven through. It ran in
+	   extensions.Start before, when the restore had already happened; the order is
+	   the other way round now, so it runs here — after the sessions exist. */
+	if s.extensions != nil {
+		s.extensions.SweepRestored()
+	}
+	slog.Info("session history restored", "sessions", len(s.sessMgr.ListAll()), "took", time.Since(started).Round(time.Millisecond).String())
+}
+
+// Restoring reports whether the instance is serving while it is still reading
+// yesterday's sessions (issue #353). A client that sees true is talking to an
+// instance that is up; the list is just not complete yet.
+func (s *Server) Restoring() bool { return s.restoring.Load() }
 
 // logSurfaces prints what this instance serves, so an operator can tell an
 // instance that is not answering from one that is not listening.

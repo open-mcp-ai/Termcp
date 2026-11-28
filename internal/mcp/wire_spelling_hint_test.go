@@ -88,3 +88,21 @@ func TestWhatLooksLikeADrivePath(t *testing.T) {
 		}
 	}
 }
+
+// THE FIX IS THE FIRST LINE (#357 §1.5).
+//
+// The hint used to be appended, so the top of the failure — the line a log shows and a
+// reader skims — was the server's error text, and the sentence that says what to write
+// instead came after it. A caller who read only the top concluded the file NAME was bad.
+func TestTheSpellingHintIsTheFirstLine(t *testing.T) {
+	got := toolResultText(fileErr(errors.New(
+		`open remote file: sftp: "open C:\Users\Administrator\C:\tc\Diana\go.mod: The filename, `+
+			`directory name, or volume label syntax is incorrect." (SSH_FX_FAILURE)`), "C:/tc/Diana/go.mod"))
+	first, _, _ := strings.Cut(got, "\n")
+	if !strings.Contains(first, "/C:/tc/Diana/go.mod") {
+		t.Fatalf("the spelling that works is not on the first line:\n%s", got)
+	}
+	if !strings.Contains(first, "Hint:") {
+		t.Errorf("the first line does not read as advice:\n%s", got)
+	}
+}

@@ -2,6 +2,7 @@ package session
 
 import (
 	"fmt"
+	"github.com/open-mcp-ai/termcp/internal/sftp"
 	"path"
 	"regexp"
 	"strings"
@@ -112,6 +113,12 @@ func (r Restriction) AllowsPath(p string) bool {
 	if len(r.paths) == 0 {
 		return true
 	}
+	// THE REQUEST IS READ THE SAME WAY THE RULE WAS (see compilePathRule). Both halves
+	// matter: adapting only the rule leaves a backslash request refused, and adapting
+	// only the request would let a spelling the rule never granted through.
+	if spelled, adapted := sftp.WireSpelling(p); adapted {
+		p = spelled
+	}
 	clean := path.Clean(p)
 	for _, rule := range r.paths {
 		switch rule.kind {
@@ -150,16 +157,52 @@ func (r Restriction) AllowsPath(p string) bool {
 // #172). The DSL's spelling comes first because the DSL is the surface this project
 // points a caller at, and the tool name is what an MCP client has instead.
 func ForbiddenTool(toolName string) string {
-	return "tool " + toolName + " is not permitted on this session: it is an extension session whose capability list does not include it. " +
-		"Use `get ext <name>` (`extension` with `action=get` on the MCP tool surface) to see what this session was created to allow."
+	return ForbiddenToolOn(toolName, "", "")
+}
+
+// ForbiddenToolOn is ForbiddenTool when the caller knows which extension and capability
+// were denied (issue #323). Saying only "not permitted" tells the caller what this
+// session cannot do, not how to finish the task: naming the extension (`edit ext <name>`)
+// and the capability (`--allow`) gives one concrete next step — or `get ext` / Web UI
+// operator if this agent does not hold edit permission.
+func ForbiddenToolOn(toolName, extName, capID string) string {
+	who := "<name>"
+	if extName != "" {
+		who = extName
+	}
+	what := ""
+	if capID != "" {
+		what = " (capability `" + capID + "`)"
+	}
+	return "tool " + toolName + what + " is not permitted on this session: it is an extension session whose capability list does not include it.\n" +
+		"Next: `get ext " + who + "` (`extension` with `action=get`) lists what it does allow. " +
+		"If the task needs this one, an operator can add `" + capIDOr(capID, toolName) + "` to its `--allow` " +
+		"(`edit ext " + who + " --allow <the list plus this>`, or the Web UI Extensions panel) and restart it."
+}
+
+func capIDOr(capID, toolName string) string {
+	if capID != "" {
+		return capID
+	}
+	return toolName
 }
 
 // ForbiddenPath renders the refusal for a path argument outside the whitelist.
 // arg is the argument that carried the path, so the caller learns which of a
 // file tool's several paths was the offending one.
 func ForbiddenPath(arg, path string) string {
-	return "path argument " + arg + " is outside the directories this extension session may reach: " + path +
-		". Use `get ext <name>` (`extension` with `action=get` on the MCP tool surface) to see the allowed paths."
+	return ForbiddenPathOn(arg, path, "")
+}
+
+// ForbiddenPathOn is ForbiddenPath naming the extension when known (issue #323).
+func ForbiddenPathOn(arg, path, extName string) string {
+	who := "<name>"
+	if extName != "" {
+		who = extName
+	}
+	return "path argument " + arg + " is outside the directories this extension session may reach: " + path + ".\n" +
+		"Next: `get ext " + who + "` (`extension` with `action=get`) lists the allowed paths. " +
+		"An operator can widen them with `edit ext " + who + " --paths <the list plus this>`, or the Web UI Extensions panel."
 }
 
 // ruleKind selects the matcher a pathPattern compiled into.
@@ -199,6 +242,14 @@ func compilePathRule(p string) (pathRule, error) {
 			return pathRule{}, fmt.Errorf("invalid regex %q: %w", p, err)
 		}
 		return pathRule{kind: ruleRegexp, re: re}, nil
+	}
+	// A RULE AND THE REQUEST ARE COMPARED AS STRINGS, so a rule written the way Windows
+	// shows a path would never match a request carrying the wire form — the extension
+	// would grant `/C:/tc` and refuse `C:\tc\x` before the SFTP layer ever saw it. The
+	// same narrow rewrite is applied to both sides, and only for a drive-prefixed path
+	// (see sftp.WireSpelling for why the rest is left alone).
+	if spelled, adapted := sftp.WireSpelling(p); adapted {
+		p = spelled
 	}
 	if strings.ContainsAny(p, "*?[") {
 		if _, err := path.Match(p, "probe"); err != nil {

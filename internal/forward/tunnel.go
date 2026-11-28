@@ -142,10 +142,13 @@ func LocalForwardSSH(ctx context.Context, client *ssh.Client, bindHost string, r
 
 // RemoteForwardSSH creates a remote forward (ssh -R): the remote SSH server listens on
 // agentHost:agentPort and tunnels connections back through SSH to termcp's remoteHost:remotePort.
+// agentHost is resolved through ResolveBindHost, so "*" means all interfaces here
+// exactly as it does for -L, and an empty host is loopback rather than the empty
+// address Go would read as "every interface".
 // The ctx is monitored; when cancelled all active connections are closed.
 // Returns the local tunnel listener for lifecycle management.
 func RemoteForwardSSH(ctx context.Context, client *ssh.Client, agentHost string, agentPort int, remoteHost string, remotePort int) (*ForwardInfo, net.Listener, error) {
-	listener, err := client.Listen("tcp", net.JoinHostPort(agentHost, fmt.Sprintf("%d", agentPort)))
+	listener, err := client.Listen("tcp", remoteBindAddr(agentHost, agentPort))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssh remote forward: %w", err)
 	}
@@ -279,7 +282,7 @@ func (fm *ForwardManager) dynamicLocal(sessionID, sshConfig, bindHost string, lo
 // "expose the API without opening a port" true rather than a diagram: the only socket is
 // the one the remote sshd opens.
 func RemoteForwardHTTP(ctx context.Context, client *ssh.Client, agentHost string, agentPort int, h http.Handler) (*ForwardInfo, net.Listener, error) {
-	listener, err := client.Listen("tcp", net.JoinHostPort(agentHost, fmt.Sprintf("%d", agentPort)))
+	listener, err := client.Listen("tcp", remoteBindAddr(agentHost, agentPort))
 	if err != nil {
 		return nil, nil, fmt.Errorf("ssh remote http forward: %w", err)
 	}
@@ -295,6 +298,19 @@ func RemoteForwardHTTP(ctx context.Context, client *ssh.Client, agentHost string
 	}
 	ServeHTTPOn(ctx, listener, h)
 	return fw, listener, nil
+}
+
+// remoteBindAddr is the address a -R request hands the TARGET's sshd.
+//
+// IT RESOLVES THE SAME WAY THE LOCAL SIDE DOES, and that is the whole point: `ssh
+// -R *:8080:…` publishes the port on every interface of the target, but the raw
+// "*" reached ForwardedTCPHandler, whose net.Listen cannot resolve it, so the
+// target answered "tcpip-forward request denied by peer" — a message that reads as
+// the target's policy (GatewayPorts) for a spelling the documentation accepts. An
+// empty host is the other half: Go reads ":8080" as every interface, so passing it
+// through would publish a tunnel that nobody asked to publish.
+func remoteBindAddr(host string, port int) string {
+	return net.JoinHostPort(ResolveBindHost(host), fmt.Sprintf("%d", port))
 }
 
 // ServeHTTPOn serves h on ln until ctx is done, then closes both.

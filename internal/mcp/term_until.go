@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/ansi"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -70,6 +71,86 @@ const (
 		`|(?m)^(?:\x1b\[[0-9;]*m)*[^\r\n]{0,120}?[❯➜λ›»][^❯➜λ›»\r\n]{0,120}[ \t]*(?:\x1b\[[0-9;]*m)*\r?$`
 )
 
+// osc133Re is osc133Done compiled once, for the passive scan (#310 P3): a run that did
+// not ask for `--until exit` still gets the shell's own report if the shell sent one.
+var osc133Re = regexp.MustCompile(osc133Done)
+
+// oscScanTail bounds the passive scan, and it is small on purpose: the shell emits its
+// completion report when the command ENDS, so the marker is the last thing in the window
+// (nothing but the prompt follows it). A `cat` of a large file must not cost a second
+// copy of itself to find a marker that is already at the end, and a marker further back
+// than this belongs to a command the window did not cover. Not finding one in the tail
+// means "no claim" — the same answer a full scan that missed would give, so the cap
+// cannot produce a false statement.
+const oscScanTail = 8 << 10
+
+// noteShellCompletion adds the shell's own completion report to a run's reply, when the
+// shell sent one and the reply has no verdict yet (#310 P3.1).
+//
+// ONE FUNCTION FOR BOTH HALVES OF A RUN. `run --grep` reads through readGrepFrom and the
+// plain form through readSlotAfter; a machine with shell integration must not answer
+// "did it finish, with what code" only when the caller happened to search the output.
+func (s *Server) noteShellCompletion(ctx context.Context, stmt directive.Statement, slot *envelope.Slot, start, end int64) {
+	if slot.Code >= 400 || s.isPipe(stmt.Target) {
+		return
+	}
+	if slot.Headers == nil {
+		slot.Headers = map[string]string{}
+	} else if slot.Headers["Completion"] != "" {
+		// A caller's own `--until`, or an observed process exit, already answered.
+		return
+	}
+	if code, ok := s.shellExitInWindow(ctx, stmt.Target, start, end); ok {
+		slot.Headers["Completion"] = "exit"
+		slot.Headers["Exit-Code"] = strconv.Itoa(code)
+	}
+}
+
+// isPipe reports whether the channel is a process rather than a terminal: a pipe's
+// completion is its exit, observed directly, and a marker in its bytes would be the
+// program talking rather than a shell reporting.
+func (s *Server) isPipe(handle string) bool {
+	cs, bad := s.requireShell(handle)
+	return bad == nil && cs != nil && !s.ptyRunning(handle)
+}
+
+// shellExitInWindow looks for the shell's own completion report in a run's window and
+// returns the status it carries (#310 P3.1).
+//
+// IT IS THE SAME EVIDENCE `--until exit` USES, READ WITHOUT BEING ASKED. A shell with
+// integration enabled (bash/zsh/fish, starship, oh-my-posh, VS Code) emits
+// `OSC 133 ; D ; <exit>` when a command ends; a caller that does not know the marker
+// exists never names it, and until now that meant the one machine that could answer
+// "did it finish, with what code" precisely was the one where `run` reported nothing.
+//
+// ABSENCE IS NOT A VERDICT, so nothing here turns a missed scan into a claim: the header
+// is set only when a marker was actually read, and `Completion` keeps meaning "here is
+// the evidence that produced this".
+func (s *Server) shellExitInWindow(ctx context.Context, handle string, from, to int64) (int, bool) {
+	if to <= from {
+		return 0, false
+	}
+	if to-from > oscScanTail {
+		from = to - oscScanTail
+	}
+	raw, ok := s.peekRaw(ctx, handle, from, to)
+	if !ok {
+		return 0, false
+	}
+	locs := osc133Re.FindAllStringSubmatch(raw, -1)
+	if len(locs) == 0 {
+		return 0, false
+	}
+	// THE LAST ONE IS THIS COMMAND'S. A window can hold the markers of commands run
+	// before it (a `read`-shaped window, or a run whose start was set earlier), and the
+	// newest report is the one that answers "the command I just started".
+	code, err := strconv.Atoi(locs[len(locs)-1][1])
+	if err != nil {
+		return 0, false
+	}
+	return code, true
+}
+
 // untilSpec is one compiled `--until`.
 type untilSpec struct {
 	raw     string
@@ -123,15 +204,6 @@ type untilWatch struct {
 	// echoText is what this call typed, so the echo can be recognised instead of assumed
 	// to be "the first line".
 	echoText string
-	// outFrom is the absolute offset where the output begins: the byte after the echoed
-	// line. Zero means "not located yet".
-	//
-	// IT IS AN OFFSET, NOT A ONE-TIME SLICE. Skipping the echo by slicing the text once
-	// only skipped it for that poll; the next poll re-read the tail, which still
-	// contained the echo, and matched the caller's own command. On a Linux runner that
-	// is what made `--until` answer "matched" 0.08s after typing, before the command had
-	// printed anything.
-	outFrom  int64
 	matched  bool
 	exitCode *int
 }
@@ -186,42 +258,27 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 	// BEFORE THE ECHO IS LOCATED THE WHOLE WINDOW IS READ, and afterwards the read
 	// starts where the output does — never before it, or the echo comes back into view
 	// on the next poll.
-	if !w.echo || w.outFrom == 0 {
+	if w.echo {
+		// FROM THE START, EVERY POLL: a ConPTY repaints the echoed line on a later poll,
+		// so a window that had already moved past the echo would see the repaint as output.
 		from = start
-	} else if from < w.outFrom {
-		from = w.outFrom
 	}
 	text, ok := s.peekRaw(ctx, handle, from, now)
 	if !ok {
 		return false, false
 	}
-	// A WINDOWS CONPTY RENDERS THE ECHO ACROSS MULTIPLE POLLS.
-	//
-	// The pty driver echoes what was typed, and PSReadLine later repaints it — often on a
-	// subsequent poll, AFTER the command output (`hi\n`) has already arrived! So the stream
-	// order on Windows ConPTY can literally be:
-	//     1. (pty driver echo) echo hi # MARKER\n
-	//     2. (command output)  hi\n
-	//     3. (PSReadLine repaint) echo hi # MARKER
-	//
-	// Setting `outFrom` on the first poll to after line 1 and never checking again meant the
-	// subsequent repaint on poll 2 was treated as output, matching the caller's own command.
-	//
-	// Therefore, as long as `w.echo` is true, ANY line in `text` that contains the echoed
-	// command line is the terminal drawing our input, not output, and is skipped.
+	// THE ECHO IS RECOGNISED BY ITS TEXT, NOT BY ITS BYTES, and that distinction is a
+	// measured bug rather than a preference. A shell that COLOURISES the typed line —
+	// PowerShell's PSReadLine, zsh syntax highlighting — interleaves SGR sequences
+	// between the words, so the caller's line never appears as one contiguous
+	// substring: the byte search found nothing, the echo stayed in the text, and
+	// `--until` matched the caller's own command 0.08 s after typing. ConPTY also
+	// repaints the echo on a later poll (after the command's output has arrived), so
+	// two copies can be present, sometimes concatenated on one line. Comparing LINES,
+	// with the colour removed for the comparison only, covers both — a line is what a
+	// terminal echoes.
 	if w.echo {
-		for {
-			idx := strings.Index(text, w.echoText)
-			if idx < 0 {
-				break
-			}
-			nl := strings.IndexByte(text[idx:], '\n')
-			if nl < 0 {
-				// The echo line is still arriving: nothing past it is output yet.
-				return false, true
-			}
-			text = text[idx+nl+1:]
-		}
+		text = dropEchoLines(text, w.echoText)
 	}
 	loc := w.spec.re.FindStringSubmatch(text)
 	if loc == nil {
@@ -236,6 +293,28 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 	return true, true
 }
 
+// dropEchoLines removes every line that is the terminal drawing the caller's input.
+//
+// THE COLOUR IS REMOVED FOR THE COMPARISON, NOT FROM THE RESULT: the caller's regex may
+// be looking for an ANSI sequence (the shell's own completion report is one), so the
+// bytes that are kept stay exactly as they arrived.
+func dropEchoLines(text, echo string) string {
+	if echo == "" {
+		return text
+	}
+	lines := strings.SplitAfter(text, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(ansi.Strip(line), echo) {
+			// The terminal drawing our input, in whatever colour it chose. A partial
+			// echo (no newline yet) is dropped too: nothing after it can be output.
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "")
+}
+
 // peekRaw reads [from,to) as the bytes that arrived, without consuming anything.
 //
 // `raw` is not optional here: the ordinary window strips ANSI, and the shell's own
@@ -247,7 +326,13 @@ func (s *Server) peekRaw(ctx context.Context, handle string, from, to int64) (st
 		return "", true
 	}
 	args := argsOf("shell_id", handle, "offset", float64(from), "max_bytes", float64(to-from), "timeout", float64(0))
-	args["raw"] = true
+	// THE READER STRIPS ANSI BY DEFAULT, and `"raw": true` was not the switch it looked
+	// like: the shared read contract has no such field, so the flag was ignored and the
+	// window came back stripped. The shell's completion report IS an ANSI sequence
+	// (OSC 133), so `--until exit` could never match — it reported "did not match within
+	// the window" on every shell that sends the marker (issue #313). The switch is
+	// `strip_ansi`.
+	args["strip_ansi"] = false
 	res, fail := s.callTool(ctx, "shell_output", args)
 	if fail != nil {
 		return "", false

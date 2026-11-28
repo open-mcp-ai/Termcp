@@ -62,7 +62,11 @@ func TestAnUnknownArgumentIsRefusedByName(t *testing.T) {
 	// The complement: every published argument is still accepted. Without this the
 	// refusal above could be "reject everything" and the test would pass.
 	for _, d := range termArgDecls {
-		if _, err := parseTermArgs(map[string]any{d.Name: sampleValueFor(d.Kind)}); err != nil {
+		sample := any(d.Sample)
+		if d.Sample == "" {
+			sample = sampleValueFor(d.Kind)
+		}
+		if _, err := parseTermArgs(map[string]any{d.Name: sample}); err != nil {
 			t.Errorf("declared argument %q is refused by the reader: %s", d.Name, err.Msg)
 		}
 	}
@@ -74,7 +78,10 @@ func sampleValueFor(kind argKind) any {
 	switch kind {
 	case argString:
 		return "ls"
-	case argStringArray:
+	case argValues:
+		// EITHER SHAPE IS LEGAL, so the sample is the ordinary one: the object form has
+		// its own test (term_args_object_test.go), and a sample that exercised both here
+		// would leave the array spelling unchecked.
 		return []any{"echo hi"}
 	case argMap:
 		return map[string]any{"V": "echo hi"}

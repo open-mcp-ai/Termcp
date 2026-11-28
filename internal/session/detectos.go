@@ -38,9 +38,9 @@ const osProbeTimeout = 5 * time.Second
 func (s *Session) DetectOS() {
 	// AN IN-PROCESS TARGET IS THIS MACHINE, so asking would be a round trip for something
 	// already known. Everything else is measured.
-	s.mu.RLock()
+	// NO LOCK: SSHEndpoint is part of the IMMUTABLE half of the record (see the
+	// Session struct comment), written once at construction and never again.
 	endpoint := s.Session.SSHEndpoint
-	s.mu.RUnlock()
 	if endpoint == "internal" {
 		s.SetOS(localOS(), "local")
 		return
@@ -124,11 +124,11 @@ func (s *Session) SetOS(name, source string) {
 	if name == "" {
 		return
 	}
-	s.mu.Lock()
-	s.Session.OS = name
-	s.Session.OSSource = source
-	s.Session.UpdatedAt = clock.Now()
-	s.mu.Unlock()
+	// ONE TRANSITION, NOT THREE FIELD WRITES: the OS, its source and the timestamp
+	// describe the same moment, which is what the snapshot is for.
+	s.updateLive(func(st *liveMeta) {
+		st.os, st.osSource, st.updatedAt = name, source, clock.Now()
+	})
 }
 
 // localOS is what an in-process target answers without asking anybody.

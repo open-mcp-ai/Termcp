@@ -206,6 +206,10 @@ func (s *Server) handleListSSHConfigs(ctx context.Context, request mcp.CallToolR
 	if err != nil {
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
+	// Masking is the store's global display switch (§10.2). It is read once for the
+	// whole listing so every row agrees, and it only affects the rendered address:
+	// `ssh_config` names are the identifiers everywhere else.
+	masked := s.sshConfigs.Masked()
 	// A LISTING THAT CANNOT TELL A USABLE HOST FROM A BROKEN ONE IS A LISTING THAT
 	// LIES. Every entry used to be printed as a bare name whether or not it parsed,
 	// so the only way to learn that a profile was unusable was to try connecting to
@@ -241,7 +245,7 @@ func (s *Server) handleListSSHConfigs(ctx context.Context, request mcp.CallToolR
 				item["where"] = localWhere(ent)
 			} else {
 				item["kind"] = "ssh"
-				item["where"] = targetOf(ent.DialSpec)
+				item["where"] = targetOf(ent.DialSpec, masked)
 			}
 		}
 		arr = append(arr, item)
@@ -278,13 +282,30 @@ func localWhere(ent *sshconfig.Entry) string {
 	return where
 }
 
+// maskFixedWidth is the same fixed-width dot mask the WebUI uses (§10.2). It does
+// not reflect the real length: a mask that grew with the address would leak how
+// long the host name is, which is the one thing masking is supposed to stop
+// mattering.
+const maskFixedWidth = "••••••"
+
 // targetOf renders the `user@host:port` a remote entry dials, for a listing column.
 //
 // An entry may leave any of the three out (the SSH defaults fill them in at dial
 // time), so each part is printed only when it was written down: a fabricated
 // `root@localhost:22` beside an entry that says nothing would be this listing
 // inventing configuration.
-func targetOf(d sshconfig.DialSpec) string {
+//
+// masked replaces the host and user with a fixed-width mask when the store's
+// global switch is on. Masking is a serialization decision: it changes neither
+// storage nor connectivity, and `ssh_config` names still work everywhere, so an
+// Agent that is told "connect to the masked one" loses nothing it needs.
+func targetOf(d sshconfig.DialSpec, masked bool) string {
+	if masked && (d.Host != "" || d.User != "" || d.Port > 0) {
+		/* Every part, including the port. Masking the host and printing `:2222`
+		   narrows down which machine this is through the one field the mask did
+		   not cover, and a row that only looks masked is worse than none. */
+		return "••••••@••••••:••••"
+	}
 	s := d.Host
 	if d.Port > 0 {
 		s += fmt.Sprintf(":%d", d.Port)
@@ -349,11 +370,27 @@ func (s *Server) handleGetSSHConfig(ctx context.Context, request mcp.CallToolReq
 		return toolError(CodeOperationFailed, "%s", err.Error()), nil
 	}
 
+	/* The detail view honours the same masking switch as the listing. Port, timeouts
+	   and the has_* booleans stay as they are: they are not identity, and hiding the
+	   port would only make an edit guess at a value the mask cannot protect. */
+	masked := s.sshConfigs.Masked()
 	dial := func(d sshconfig.DialSpec) map[string]any {
+		host, user, port := d.Host, d.User, d.Port
+		if masked {
+			/* The port is masked too, and as zero rather than as a number: the
+			   caller reads `masked` and prints its own mask. */
+			if host != "" {
+				host = maskFixedWidth
+			}
+			if user != "" {
+				user = maskFixedWidth
+			}
+			port = 0
+		}
 		m := map[string]any{
-			"host":           d.Host,
-			"port":           d.Port,
-			"user":           d.User,
+			"host":           host,
+			"port":           port,
+			"user":           user,
 			"has_password":   d.Password != "",
 			"private_key":    d.PrivateKey,
 			"known_hosts":    d.KnownHosts,
@@ -371,6 +408,11 @@ func (s *Server) handleGetSSHConfig(ctx context.Context, request mcp.CallToolReq
 		"name":        name,
 		"kind":        ent.Kind,
 		"description": ent.Description,
+	}
+	if masked {
+		/* Without this flag a caller cannot tell "port 0" from "no port written
+		   down" — the second is a real state this surface reports honestly. */
+		out["masked"] = true
 	}
 	for k, v := range dial(ent.DialSpec) {
 		out[k] = v

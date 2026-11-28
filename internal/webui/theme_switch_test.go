@@ -102,7 +102,11 @@ const mediaQueries = [];
 const mediaAnswers = {};
 const context = {
  console, Promise, setTimeout, clearTimeout, navigator: { languages: ['en'] },
- window: { matchMedia: q => { const mq = { query: q, get matches() { return !!mediaAnswers[q]; }, listeners: [], addEventListener(n, fn) { this.listeners.push(fn); } }; mediaQueries.push(mq); return mq; } },
+ window: { matchMedia: q => { const mq = { query: q, get matches() { return !!mediaAnswers[q]; }, listeners: [], addEventListener(n, fn) { this.listeners.push(fn); } }; mediaQueries.push(mq); return mq; },
+  /* i18n.js re-applies the catalog once the document reports load — the modules
+     after it build their own markup, which its first pass cannot see. A stub with
+     no way to register that listener is a browser with no load event. */
+  addEventListener() {} },
  document: { documentElement: root, head, createElement: link,
   getElementById: id => id === 'theme-current' ? themeCurrent : (links.find(el => el.id === id) || null),
   querySelectorAll: selector => selector.includes('data-i18n') ? [label] : [], addEventListener: (name, fn) => callbacks[name] = fn },

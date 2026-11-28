@@ -236,15 +236,27 @@ func TestRowLayoutAgreesWithXterm(t *testing.T) {
 	}
 
 	dir := t.TempDir()
+	// A NODE THAT CANNOT PARSE THE BUNDLE IS A MISSING TOOL, NOT A BUG IN THE MODEL.
+	//
+	// The bundled xterm.js uses syntax that older Node versions reject, and the failure
+	// arrives as a SyntaxError inside require() — which reads exactly like the row model
+	// having broken, and cost a full-suite run here to attribute. The runtime is asked
+	// directly, with --check, which parses the file without executing it: that avoids
+	// pinning a version number that would drift from the bundle, and it still fails
+	// loudly for any mismatch the model itself causes.
+	xtermPath := filepath.Join(dir, "xterm.js")
+	if err := os.WriteFile(xtermPath, []byte(xterm), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(node, "--check", xtermPath).CombinedOutput(); err != nil {
+		t.Skipf("this node (%s) cannot parse the bundled xterm, so there is no reference terminal to compare against: %v\n%s",
+			nodeVersion(node), err, strings.TrimSpace(string(out)))
+	}
 	// Both files live in the test's own directory: the node side is told where to
 	// read and where to write, so nothing depends on a shared path or on the
 	// working directory.
 	casesPath := filepath.Join(dir, "cases.json")
 	outPath := filepath.Join(dir, "probe.json")
-	xtermPath := filepath.Join(dir, "xterm.js")
-	if err := os.WriteFile(xtermPath, []byte(xterm), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	cases := xtermCorpus()
 	// The log is what the model is fed, and it is assembled here rather than on the
 	// node side so both sides consume byte-for-byte the same stream.
@@ -550,4 +562,14 @@ func readBundledXterm() (string, error) {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// nodeVersion renders the runtime's own version for the skip message, so a reader knows
+// which interpreter refused the bundle without re-running it by hand.
+func nodeVersion(node string) string {
+	out, err := exec.Command(node, "--version").Output()
+	if err != nil {
+		return node
+	}
+	return strings.TrimSpace(string(out))
 }

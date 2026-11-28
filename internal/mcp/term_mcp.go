@@ -8,7 +8,6 @@ import (
 	"io"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -33,16 +32,38 @@ import (
 // A stdio peer is just a line-oriented pipe: `run` writes the frame, `read` gets the
 // reply. That is the whole implementation, and it is why an MCP server needs no
 // registration ceremony — `pipe --argv` starts it, and this types at it.
+// channelStateKey maps any spelling of a live channel (`sid:1`, `name:1`, short prefix,
+// or the shell's own id) to the child shell's immutable id, so cursor/reader/pending
+// state stays unified across callers and between tool-name wrappers and raw frames.
+func (s *Server) channelStateKey(handle string) string {
+	if cs, bad := s.requireShell(handle); bad == nil && cs != nil {
+		return cs.ID
+	}
+	return handle
+}
+
 func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub string, handle string, rest []string, win termArgs) envelope.Slot {
 	headers := map[string]string{"Path": stmt.Path}
+	stateKey := s.channelStateKey(handle)
 	switch sub {
 	case "tools", "send", "call":
+		rawPayload := strings.TrimSpace(strings.Join(rest, " "))
+		// A PIPE-MODE MCP EXTENSION IS A REAL MCP PEER (issue #316). An unmanaged pipe
+		// stays raw-frame only (#271), because anything could be running on it; an
+		// extension channel whose template declared a stdio MCP server accepts
+		// `call <channel> <tool> [<json-args>]` just like the HTTP form accepts
+		// `call <session> mcp:<n> <tool> [<json-args>]`.
+		if (sub == "call" || sub == "send") && rawPayload != "" &&
+			!strings.HasPrefix(unquoteWord(rawPayload), "{") &&
+			s.stdioMCPChannel(handle) != "" {
+			return s.extStdioToolCall(ctx, stmt, handle, rawPayload, win, sub == "send" || boolFlag(stmt, "send"))
+		}
 		var frame string
 		switch sub {
 		case "tools":
 			frame = `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
 		default:
-			payload := unquoteWord(strings.TrimSpace(strings.Join(rest, " ")))
+			payload := unquoteWord(rawPayload)
 			if payload == "" {
 				return badRequest(stmt, "mcp "+sub+" needs a JSON-RPC frame")
 			}
@@ -58,12 +79,26 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 			}
 			frame = payload
 		}
-		// One frame, one line: the peer reads line-delimited JSON-RPC.
-		if _, fail := s.callTool(ctx, "shell_input", argsOf("shell_id", handle, "text", frame)); fail != nil {
-			return s.slotFromFailure(ctx, stmt, fail)
+		// One frame, one line, under the channel's line token so a bare frame and the
+		// tool-name wrapper cannot interleave on the same process (#212).
+		tok := s.lineToken(stateKey)
+		select {
+		case <-tok:
+		case <-ctx.Done():
+			return s.slotFromFailure(ctx, stmt, &toolFailure{code: CodeInvalidArgument,
+				msg: "timed out waiting for a prior command line on this channel to finish submitting"})
 		}
-		if _, fail := s.callTool(ctx, "shell_key", argsOf("shell_id", handle, "key", "enter")); fail != nil {
-			return s.slotFromFailure(ctx, stmt, fail)
+		_, failIn := s.callTool(ctx, "shell_input", argsOf("shell_id", handle, "text", frame))
+		var failKey *toolFailure
+		if failIn == nil {
+			_, failKey = s.callTool(ctx, "shell_key", argsOf("shell_id", handle, "key", "enter"))
+		}
+		tok <- struct{}{}
+		if failIn != nil {
+			return s.slotFromFailure(ctx, stmt, failIn)
+		}
+		if failKey != nil {
+			return s.slotFromFailure(ctx, stmt, failKey)
 		}
 		// `call` WAITS FOR THE REPLY IT CAUSED; `send` DOES NOT.
 		//
@@ -86,17 +121,19 @@ func (s *Server) mcpStdio(ctx context.Context, stmt directive.Statement, sub str
 			return envelope.Slot{Code: 202, Headers: headers, Body: "sent; read the reply with `read " + handle + " --frame`"}
 		}
 		if id := frameID(frame); id != "" {
-			return s.mcpAwaitReply(ctx, stmt, handle, id, win, headers)
+			return s.mcpAwaitReply(ctx, stmt, stateKey, id, win, headers)
 		}
 		// A notification has no answer to wait for, so waiting would be a lie.
 		return envelope.Slot{Code: 202, Headers: headers, Body: "sent (a notification has no reply); read frames with `read " + handle + " --frame`"}
 	case "recv":
-		return s.mcpRecvFrame(ctx, stmt, handle, win)
+		return s.mcpRecvFrame(ctx, stmt, stateKey, win)
 	case "close":
 		// The cursor has to go with the handle: handles are minted monotonically
 		// (jrpcHandleSeq), so a reopened channel never reuses this key and the map
 		// would grow by one entry per channel the process ever opened.
+		s.dropRecvCursor(stateKey)
 		s.dropRecvCursor(handle)
+		s.stdioPeers.Delete(stateKey)
 		return envelope.Slot{Code: 204, Headers: headers}
 	}
 	return badRequest(stmt, "unknown mcp subcommand: "+sub)
@@ -254,7 +291,11 @@ func (s *Server) mcpRecvFrameOnce(ctx context.Context, stmt directive.Statement,
 			return envelope.Slot{Code: 413, Headers: map[string]string{
 				"Path": stmt.Path, "Error-Code": "frame_too_large",
 				"Content-Range": envelope.UnsatisfiedRange(total),
-			}, Body: fmt.Sprintf("a frame at offset %d is longer than the %d-byte window", from, window)}, false
+			}, Body: fmt.Sprintf("a frame at offset %d is longer than the %d-byte window that this call asked "+
+				"for.\nThe default window is %d bytes (the transport's own frame limit), so a frame above it "+
+				"has to be requested: pass a larger `bytes_limit` on the call — there is no cursor that can page "+
+				"inside one frame, and MCP has no chunking to retry with.",
+				from, window, minRecvWindow)}, false
 		}
 		// THE EXPLANATION IS A HEADER, NOT A BODY (see noContentSaying). "no complete
 		// frame yet" is true of a slow peer and of a peer whose bytes will never parse,
@@ -392,8 +433,20 @@ func recvWindow(win termArgs) time.Duration {
 // defaultBytesLimit is the tool's default for a READ, where a caller usually wants
 // a screenful. A JSON-RPC frame is a different unit: an initialize result with
 // instructions is routinely larger than that, and a window smaller than one frame
-// makes it undeliverable. 1 MiB is far past any legitimate frame and still a bound.
-const minRecvWindow = 1 << 20
+// makes it undeliverable.
+//
+// IT IS THE TRANSPORT'S FRAME LIMIT, NOT A NUMBER OF ITS OWN (issue #327). 1 MiB used
+// to be the floor, and it was reachable: an MCP server returning a base64 screenshot
+// or a large JSON document (4 MB happens on real servers) answered 413
+// frame_too_large, and MCP has no chunking to retry with — the result was simply
+// undeliverable. The transport already accepts an 8 MiB frame inbound (mcp/sse.go's
+// readLimitedBody), so anything under that is a frame this instance can carry; a
+// window smaller than the transport's own limit was this file disagreeing with it.
+//
+// IT IS STILL A BOUND. A peer that answers with something larger than 8 MiB is
+// misbehaving, and 413 with the ceiling named is the right answer for it — silence
+// would be worse, and there is no cursor that can page inside one frame.
+const minRecvWindow = 8 << 20
 
 // recvCursor and setRecvCursor keep one read position per channel.
 //
@@ -413,20 +466,25 @@ func (s *Server) recvReader(handle string) chan struct{} {
 	return actual.(chan struct{})
 }
 
-// lineLock returns the mutex that makes one channel's writes land as whole lines,
-// creating it on first use.
+// lineToken returns the one-slot channel token that makes one channel's writes land as
+// whole lines, creating it on first use.
 //
 // THE UNIT IS A LINE, not a write: `run` sends the text and the enter that ends it as
 // two calls, and two runs interleaving there produce a stream no line reader can
 // parse (issue #212). Callers hold this across both writes and release it before
 // waiting for output.
-func (s *Server) lineLock(handle string) *sync.Mutex {
-	if v, ok := s.lineLocks.Load(handle); ok {
-		return v.(*sync.Mutex)
+//
+// A TOKEN RATHER THAN A MUTEX: acquiring it can listen on the caller's ctx, and
+// releasing it is a send, so there is no path that can return while holding it
+// (AGENTS.md).
+func (s *Server) lineToken(handle string) chan struct{} {
+	if v, ok := s.lineTokens.Load(handle); ok {
+		return v.(chan struct{})
 	}
-	m := &sync.Mutex{}
-	actual, _ := s.lineLocks.LoadOrStore(handle, m)
-	return actual.(*sync.Mutex)
+	tok := make(chan struct{}, 1)
+	tok <- struct{}{}
+	actual, _ := s.lineTokens.LoadOrStore(handle, tok)
+	return actual.(chan struct{})
 }
 
 func (s *Server) recvCursor(handle string) int64 {

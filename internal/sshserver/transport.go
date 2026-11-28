@@ -57,10 +57,13 @@ func (l *inMemListener) Dial() (net.Conn, error) {
 // version exchange when both sides write before either reads (net.Pipe / io.Pipe
 // are synchronous and block writes until the other side reads).
 type duplexConn struct {
-	writeMu   sync.Mutex // serializes close(writeCh) and sends to writeCh
-	readCh    <-chan []byte
-	writeCh   chan []byte // bidirectional; nil after Close (peer reader gets io.EOF via close)
+	readCh  <-chan []byte
+	writeCh chan []byte
+	// closeCh is closed by Close and is the ONLY thing Close closes. The peer learns
+	// about it through peerClose, which is this conn's peer's closeCh — so a reader
+	// blocked on readCh is released without anyone closing (or nil-ing) writeCh.
 	closeCh   chan struct{}
+	peerClose <-chan struct{}
 	closeOnce sync.Once
 	readBuf   []byte
 }
@@ -72,15 +75,25 @@ func (c *duplexConn) Read(b []byte) (int, error) {
 		return n, nil
 	}
 	select {
-	case data, ok := <-c.readCh:
-		if !ok {
-			return 0, io.EOF
-		}
+	case data := <-c.readCh:
 		n := copy(b, data)
 		if n < len(data) {
 			c.readBuf = data[n:]
 		}
 		return n, nil
+	case <-c.peerClose:
+		// THE PEER CLOSED: drain what it already sent, then EOF. Reading the buffer
+		// first is why this is not a bare EOF — bytes in flight must still arrive.
+		select {
+		case data := <-c.readCh:
+			n := copy(b, data)
+			if n < len(data) {
+				c.readBuf = data[n:]
+			}
+			return n, nil
+		default:
+			return 0, io.EOF
+		}
 	case <-c.closeCh:
 		return 0, net.ErrClosed
 	}
@@ -89,31 +102,31 @@ func (c *duplexConn) Read(b []byte) (int, error) {
 func (c *duplexConn) Write(b []byte) (int, error) {
 	data := make([]byte, len(b))
 	copy(data, b)
-	// Hold writeMu across the send so Close cannot close writeCh mid-send
-	// (that would be a data race and a "send on closed channel" panic).
-	// Close closes closeCh before taking writeMu, so a blocked send here is
-	// always released instead of deadlocking the two.
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	wch := c.writeCh
-	if wch == nil {
+	// NOBODY EVER CLOSES writeCh, so a send can never panic and needs no lock:
+	// Close closes its own closeCh only, and this select is what releases a send
+	// that would otherwise block on a peer that is gone.
+	select {
+	case <-c.closeCh:
 		return 0, net.ErrClosed
+	case <-c.peerClose:
+		return 0, io.ErrClosedPipe
+	default:
 	}
 	select {
-	case wch <- data:
+	case c.writeCh <- data:
 		return len(b), nil
 	case <-c.closeCh:
 		return 0, net.ErrClosed
+	case <-c.peerClose:
+		return 0, io.ErrClosedPipe
 	}
 }
 
 func (c *duplexConn) Close() error {
 	c.closeOnce.Do(func() {
-		close(c.closeCh) // unblock local reads/writes
-		c.writeMu.Lock()
-		close(c.writeCh) // unblock peer's reader (writeCh is always non-nil inside closeOnce)
-		c.writeCh = nil
-		c.writeMu.Unlock()
+		// ONE CHANNEL, ONE CLOSE. The peer's reader watches this through peerClose;
+		// writeCh is never closed, which is what makes Write lock-free.
+		close(c.closeCh)
 	})
 	return nil
 }
@@ -131,8 +144,10 @@ func duplexPipe() (net.Conn, net.Conn) {
 	a2b := make(chan []byte, bufCap)
 	b2a := make(chan []byte, bufCap)
 
-	a := &duplexConn{readCh: b2a, writeCh: a2b, closeCh: make(chan struct{})}
-	b := &duplexConn{readCh: a2b, writeCh: b2a, closeCh: make(chan struct{})}
+	aClose := make(chan struct{})
+	bClose := make(chan struct{})
+	a := &duplexConn{readCh: b2a, writeCh: a2b, closeCh: aClose, peerClose: bClose}
+	b := &duplexConn{readCh: a2b, writeCh: b2a, closeCh: bClose, peerClose: aClose}
 	return a, b
 }
 

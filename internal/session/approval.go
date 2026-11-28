@@ -3,6 +3,7 @@ package session
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-mcp-ai/termcp/internal/approval"
@@ -25,7 +26,6 @@ import (
 //     webui.handleWSInput): a per-keystroke stream cannot be reviewed as a unit,
 //     so it is dropped rather than squeezed through the queue.
 type approvalState struct {
-	mu     sync.Mutex
 	queue  *approval.Queue
 	need   int
 	window time.Duration
@@ -37,17 +37,14 @@ type approvalState struct {
 	// shell. An agent types a line and then presses enter, and those are two MCP
 	// calls; holding the text until the newline arrives is what lets a reviewer
 	// see one complete command instead of half a line followed by a bare enter.
-	pending map[string]*stagedInput
-	// onChange is invoked (without the lock) after every queue transition, so
-	// the UI and waiting agents can be notified.
-	onChange func(sessionID string, req approval.Request)
-}
-
-// stagedInput is one shell's uncommitted text. It is not yet a reviewable unit,
-// so it is deliberately not in the queue: nothing decides it until an ending key
-// arrives.
-type stagedInput struct {
-	text string
+	//
+	// A sync.Map OF STRINGS, NOT A LOCKED MAP OF MUTABLE CELLS: the value is the
+	// whole state of one shell, appending is a CompareAndSwap on that key, and no
+	// rule spans two shells. Every other field of approvalState is written once when
+	// the state is built.
+	pending sync.Map // shellID string -> staged text string
+	// onChange is atomic so a transition never holds a lock while calling out.
+	onChange atomic.Pointer[func(sessionID string, req approval.Request)]
 }
 
 // SubmitStaged appends text for a shell and reports whether a reviewer needs to
@@ -58,48 +55,41 @@ type stagedInput struct {
 // queueing each separately would ask for two decisions on one command (and allow
 // approving the text while rejecting the newline, leaving a half-typed line).
 func (s *Session) SubmitStaged(shellID, source, text string) error {
-	s.mu.Lock()
-	st := s.approval
-	s.mu.Unlock()
+	st := s.approval.Load()
 	if st == nil {
 		return ErrApprovalOff
 	}
 	if text == "" {
 		return nil
 	}
-	st.mu.Lock()
-	if st.pending == nil {
-		st.pending = map[string]*stagedInput{}
+	// APPEND BY CAS: two calls can stage on one shell at once, and the second must
+	// see the first's text rather than replace it.
+	for {
+		cur, ok := st.pending.Load(shellID)
+		if !ok {
+			if _, loaded := st.pending.LoadOrStore(shellID, text); !loaded {
+				return nil
+			}
+			continue
+		}
+		if st.pending.CompareAndSwap(shellID, cur, cur.(string)+text) {
+			return nil
+		}
 	}
-	cur := st.pending[shellID]
-	if cur == nil {
-		cur = &stagedInput{}
-		st.pending[shellID] = cur
-	}
-	cur.text += text
-	st.mu.Unlock()
-	return nil
 }
 
 // CommitStaged turns whatever a shell has staged into a queued request, adding
 // the key that ended it. With nothing staged, the key alone is queued: a bare
 // ctrl+c or enter is a command line of its own and must still be reviewable.
 func (s *Session) CommitStaged(shellID, source, key string, repeat int) (string, error) {
-	s.mu.Lock()
-	st := s.approval
-	s.mu.Unlock()
+	st := s.approval.Load()
 	if st == nil {
 		return "", ErrApprovalOff
 	}
-	st.mu.Lock()
 	text := ""
-	if st.pending != nil {
-		if cur := st.pending[shellID]; cur != nil {
-			text = cur.text
-			delete(st.pending, shellID)
-		}
+	if cur, ok := st.pending.LoadAndDelete(shellID); ok {
+		text, _ = cur.(string)
 	}
-	st.mu.Unlock()
 
 	keys := make([]string, 0, repeat)
 	for i := 0; i < repeat; i++ {
@@ -112,9 +102,7 @@ func (s *Session) CommitStaged(shellID, source, key string, repeat int) (string,
 
 // discardStaged drops every shell's uncommitted text.
 func (st *approvalState) discardStaged() {
-	st.mu.Lock()
-	st.pending = nil
-	st.mu.Unlock()
+	st.pending.Clear()
 }
 
 // approvalConfig is the resolved configuration for enabling approval mode.
@@ -156,7 +144,10 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 		return err
 	}
 
-	st := &approvalState{need: need, window: timeout, onChange: s.approvalSink, scopes: set}
+	st := &approvalState{need: need, window: timeout, scopes: set}
+	if sink := s.approvalSink.Load(); sink != nil {
+		st.onChange.Store(sink)
+	}
 	// The queue's change hook re-reads the session's current state rather than
 	// capturing the event sink here: the sink is installed by main and can be
 	// replaced between enable and use.
@@ -167,11 +158,8 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 			// The audit mark goes first: a replay of log.jsonl should show the
 			// decision point even if a UI subscriber is slow or absent.
 			s.recordApprovalMark(r)
-			st.mu.Lock()
-			sink := st.onChange
-			st.mu.Unlock()
-			if sink != nil {
-				sink(s.ID, r)
+			if p := st.onChange.Load(); p != nil && *p != nil {
+				(*p)(s.ID, r)
 			}
 		},
 	})
@@ -184,19 +172,16 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 		return ErrSessionClosing
 	}
 
-	s.mu.Lock()
+	prev := s.approval.Load()
 	if s.closing.Load() {
-		s.mu.Unlock()
 		st.discardStaged()
 		st.queue.Close("session is closing")
 		return ErrSessionClosing
 	}
-	prev := s.approval
-	s.approval = st
+	s.approval.Store(st)
 	// A live queue supersedes the retained one: the cancelled history belongs to a
 	// mode that is no longer in force.
-	s.retainedQueue = nil
-	s.mu.Unlock()
+	s.retainedQueue.Store(nil)
 
 	if prev != nil {
 		prev.discardStaged()
@@ -217,18 +202,16 @@ func (s *Session) EnableApprovalScoped(need int, timeout time.Duration, scopes [
 // not yet approved must not become executable merely because the mode changed.
 // It also releases callers blocked in Wait instead of leaving them until timeout.
 func (s *Session) DisableApproval() {
-	s.mu.Lock()
-	st := s.approval
-	s.approval = nil
+	st := s.approval.Load()
+	s.approval.Store(nil)
 	if st != nil {
 		// KEEP THE QUEUE READABLE (issue #217). Clearing it made every pending
 		// request vanish from /api/approvals the moment the session closed: the
 		// safety half was right (approving answered 404/409 and nothing executed),
 		// but the promised terminal `cancelled` state could never be observed, so a
 		// harness could not tell why a request ended.
-		s.retainedQueue = st.queue
+		s.retainedQueue.Store(st.queue)
 	}
-	s.mu.Unlock()
 
 	if st != nil {
 		st.discardStaged()
@@ -238,9 +221,7 @@ func (s *Session) DisableApproval() {
 
 // ApprovalEnabled reports whether this session gates anything at all.
 func (s *Session) ApprovalEnabled() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.approval != nil
+	return s.approval.Load() != nil
 }
 
 // GatesKind reports whether this session holds operations of this kind.
@@ -251,9 +232,7 @@ func (s *Session) ApprovalEnabled() bool {
 // through. A caller that only checked ApprovalEnabled would hold the wrong
 // things — which is the whole point of #75.
 func (s *Session) GatesKind(kind approval.Kind) bool {
-	s.mu.RLock()
-	st := s.approval
-	s.mu.RUnlock()
+	st := s.approval.Load()
 	if st == nil {
 		return false
 	}
@@ -264,9 +243,7 @@ func (s *Session) GatesKind(kind approval.Kind) bool {
 // everything. Reported so the UI can show what the switch currently covers
 // instead of a bare on/off.
 func (s *Session) ApprovalScopes() []approval.Kind {
-	s.mu.RLock()
-	st := s.approval
-	s.mu.RUnlock()
+	st := s.approval.Load()
 	if st == nil {
 		return nil
 	}
@@ -277,8 +254,6 @@ func (s *Session) ApprovalScopes() []approval.Kind {
 // lock (EnableApproval swaps the whole state in, so the set never changes under a
 // live pointer, but the lock keeps the read explicit).
 func (st *approvalState) gates(kind approval.Kind) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
 	if st.scopes == nil {
 		return true
 	}
@@ -287,8 +262,6 @@ func (st *approvalState) gates(kind approval.Kind) bool {
 
 // scopeList returns the gated kinds in a stable order, or nil for "everything".
 func (st *approvalState) scopeList() []approval.Kind {
-	st.mu.Lock()
-	defer st.mu.Unlock()
 	if st.scopes == nil {
 		return nil
 	}
@@ -298,16 +271,14 @@ func (st *approvalState) scopeList() []approval.Kind {
 // ApprovalQueue returns the active queue, or nil when approval mode is off.
 // Callers use it to submit, list, and decide requests.
 func (s *Session) ApprovalQueue() *approval.Queue {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.approval != nil {
-		return s.approval.queue
+		if st := s.approval.Load(); st != nil {
+		return st.queue
 	}
 	// A disabled or closed session retains its closed queue so readers can observe
 	// the terminal cancelled state (issue #217). It gates nothing — ApprovalEnabled
 	// and GatesKind both read s.approval — and approving from it answers
 	// ErrNotPending, so a late click cannot execute anything.
-	return s.retainedQueue
+	return s.retainedQueue.Load()
 }
 
 // SetApprovalChangeHandler installs the sink notified on every queue
@@ -317,15 +288,9 @@ func (s *Session) ApprovalQueue() *approval.Queue {
 // It works whether or not approval mode is already on: main installs the sink
 // at startup for every session it creates, and mode is switched on later.
 func (s *Session) SetApprovalChangeHandler(fn func(sessionID string, req approval.Request)) {
-	s.mu.Lock()
-	s.approvalSink = fn
-	st := s.approval
-	s.mu.Unlock()
-
-	if st != nil {
-		st.mu.Lock()
-		st.onChange = fn
-		st.mu.Unlock()
+	s.approvalSink.Store(&fn)
+	if st := s.approval.Load(); st != nil {
+		st.onChange.Store(&fn)
 	}
 }
 
@@ -333,9 +298,7 @@ func (s *Session) SetApprovalChangeHandler(fn func(sessionID string, req approva
 // ErrApprovalOff when approval mode is off, which the caller reads as "write
 // directly".
 func (s *Session) submitApproval(shellID, source, text string, keys []string) (string, error) {
-	s.mu.RLock()
-	st := s.approval
-	s.mu.RUnlock()
+	st := s.approval.Load()
 	if st == nil {
 		return "", ErrApprovalOff
 	}
@@ -350,9 +313,7 @@ func (s *Session) submitApproval(shellID, source, text string, keys []string) (s
 // look. What differs is the payload, which the caller describes with a summary
 // (what a human reads) and a payload (what the executor replays).
 func (s *Session) SubmitOperation(sub approval.Submission) (string, error) {
-	s.mu.RLock()
-	st := s.approval
-	s.mu.RUnlock()
+	st := s.approval.Load()
 	if st == nil {
 		return "", ErrApprovalOff
 	}

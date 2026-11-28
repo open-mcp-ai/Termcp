@@ -1,0 +1,357 @@
+/* Keychain panel — the stylesheet for one dialog and the three sheets it opens.
+ *
+ * The DOM this dresses is in static/js/config-storage.js, and every class here
+ * exists in that file: the stylesheet is a description of the markup, not a
+ * museum of the designs it went through. When a class stops being emitted, its
+ * rule goes with it.
+ *
+ * Two rules of the house apply inside a dialog and are easy to forget:
+ *   - `.modal-body input` (base.css) gives every input width:100% and text-field
+ *     padding. A checkbox is an input, so the list's ticks undo exactly that.
+ *   - `.conn-field-hint` (base.css) is a caption: 8px below itself, and the field
+ *     above keeps its own margin. It used to pull itself up by 8px, which only
+ *     worked directly under an input and ate the padding of any other container.
+ */
+
+/* ---- the panel ----------------------------------------------------------- */
+
+/* The status is a caption on the title line: one short clause, read at a glance,
+   pushed against the heading. Rules ("each host is activated on its own") are
+   stated where they apply, not here. */
+.cs-title-note { font-size: 12px; font-weight: 400; opacity: .6; margin-left: 8px; }
+.cs-title-note:empty { display: none; }
+.modal-h .modal-x { margin-left: auto; }
+
+/* ---- the keychain's own actions: icons at the right of the list header ---- */
+
+/* Pinned to the right edge by its own auto margin, not by the filter's flex:
+   the filter shrinks when the selection tools appear, and "the buttons moved
+   left" is exactly what depending on it looked like. */
+.cs-list-tools { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; margin-left: auto; }
+.cs-tool {
+  padding: 5px; line-height: 0;
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text-muted); cursor: pointer;
+}
+.cs-tool:hover { background: rgba(127, 127, 127, .12); color: var(--text-primary); }
+.cs-tool.is-primary { color: var(--accent); }
+/* A disabled export is not a lighter invitation: it says "tick a key first". */
+.cs-tool:disabled { opacity: .3; cursor: default; background: none; }
+
+/* ---- the list's head: select everything, filter it, act on it ------------ */
+
+/* Same horizontal padding as a row, so the header's box lines up with the boxes
+   below it instead of hanging off the left edge. */
+.cs-list-head {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 8px; padding: 0 10px;
+}
+/* ---- the title bar: the panel's one control row --------------------------- */
+
+/* The tick and the keychain's four actions live beside the title, because the row
+   they used to sit in was a header between a title and the list that title names.
+   `flex-start` rather than base.css's `space-between`: with five children the
+   title, the tick and the count belong together at the left, and the actions are
+   pushed right by their own auto margin so they hug the close button. */
+.cs-title-bar { justify-content: flex-start; }
+.cs-title-bar .cs-tick-all { flex: 0 0 auto; margin: 0 0 0 10px; }
+.cs-title-bar .cs-list-tools { margin-left: auto; }
+/* base.css parks the close button at the right with `margin-left: auto`; here the
+   tools already did that, and two auto margins would share the free space and
+   leave a gap between the last action and the X. */
+#modal-config-storage .modal-h .modal-x { margin-left: 4px; }
+.cs-filter {
+  flex: 1 1 auto; min-width: 0;
+  margin: 0; padding: 5px 10px;
+  border: 1px solid var(--border-subtle); border-radius: 6px;
+  background: var(--bg-input); color: var(--text-primary);
+  font: inherit; font-size: 12px;
+}
+/* Red, and not only on hover: this is the destructive one of four icons, and the
+   colour is what keeps it from being read as "one of the tools". */
+.cs-tool-danger { color: #e05a4a; }
+.cs-tool-danger:hover { color: #ff6f5e; background: color-mix(in srgb, #e05a4a 14%, transparent); }
+.cs-tool-danger:disabled { color: var(--text-muted); }
+
+/* Profile card lock. Same box as .conn-edit-btn and .conn-quick-btn: the three
+   sit in a row, so a different radius or padding would be visible as a seam. */
+/* The title bar sits directly on the body, whose first child is the list header;
+   the panel's own rhythm is slightly taller than a plain form's so the header row
+   does not read as if it were cut off from the title. */
+#modal-config-storage .modal-body { padding: 14px 24px 18px; }
+
+/* The entry key in the host drawer: the one control whose subject is the store
+   itself. Warning while nothing is encrypted, accent once a key protects it,
+   warning again while the key is out, red when ciphertext has outlived its key,
+   and neutral before the first status read — the states the panel distinguishes,
+   said on the button before the panel is even open. */
+#config-storage-open:not(.is-configured) { color: var(--warning); }
+#config-storage-open.is-configured { color: var(--accent); }
+#config-storage-open.is-locked { color: var(--warning); }
+#config-storage-open.is-orphaned { color: var(--danger); }
+#config-storage-open.is-unknown { color: var(--text-muted); }
+
+/* The banner is a door when it invites a click (a host that cannot be loaded
+   until its key is in), not a notice. */
+
+.conn-tile.entry-card .conn-storage-mark {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+  z-index: var(--z-tile-control);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  color: var(--warning);
+}
+
+.conn-tile.entry-card .conn-storage-mark svg { width: 14px; height: 14px; display: block; }
+.conn-tile.entry-card .conn-storage-mark:hover { color: var(--warning); background: var(--warning-surface); }
+.conn-tile.entry-card .conn-storage-mark:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--warning-border); }
+
+/* Protected is the resting state of a store that is working, so it keeps the
+   neighbours' quiet grey until the pointer arrives. */
+.conn-tile.entry-card .conn-storage-mark.is-locked { color: var(--text-secondary); }
+.conn-tile.entry-card .conn-storage-mark.is-locked:hover { color: var(--accent); background: var(--accent-surface); }
+.conn-tile.entry-card .conn-storage-mark.is-locked:focus-visible { box-shadow: 0 0 0 2px var(--accent-ring); }
+
+.conn-storage-mark.is-locked[disabled] { opacity: .55; cursor: progress; }
+
+/* ---- the list: one line per key -----------------------------------------
+   A keychain is a table. The eye compares name against state down a column, so a
+   row is a line and the separator belongs to the list, not to every row. */
+
+.cs-keys { margin: 0; padding: 0; list-style: none; }
+.cs-key-row {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+}
+.cs-key-row:last-child { border-bottom: 0; }
+.cs-key-row:hover { background: rgba(127, 127, 127, .06); }
+.cs-key-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cs-key-name-text {
+  flex: 0 1 auto; min-width: 0;
+  font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cs-key-name-text.is-unnamed { font-weight: 400; opacity: .6; font-style: italic; }
+.cs-key-badge {
+  flex: 0 0 auto; white-space: nowrap;
+  /* The badge belongs to the NAME, not to the buttons: it hugs the name and its
+     auto margin pushes the controls to the far end of the row. Without it the name
+     stretches, the badge lands next to the buttons, and a short list reads as three
+     half-empty lines. */
+  margin-right: auto;
+  padding: 1px 6px; border-radius: 4px;
+  font-size: 11px; font-weight: 500; line-height: 1.4;
+}
+.cs-key-badge.is-active {
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+}
+.cs-key-badge.is-inactive { background: rgba(127, 127, 127, .12); color: var(--text-muted); }
+
+/* Clicking a row ticks it, so a ticked row has to look ticked before the eye
+   reaches the checkbox. */
+.cs-key-row.is-selected { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.cs-key-row.is-selected:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* Detail: the row's only way into the key's sheet, so it is the one control
+   that stays visible at rest while the verbs beside it fade. A chevron, not an
+   eye: the row already states the key's state in words, and there is no secret
+   hidden behind this click. */
+.cs-key-view {
+  flex: 0 0 auto; padding: 4px; line-height: 0;
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text-muted); cursor: pointer; opacity: .75;
+}
+.cs-key-view:hover { opacity: 1; background: rgba(127, 127, 127, .12); color: var(--text-primary); }
+
+/* Insert / remove: one switch, lit while the key is in memory. */
+.cs-key-power {
+  flex: 0 0 auto; padding: 4px; line-height: 0;
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text-muted); cursor: pointer; opacity: .5;
+}
+.cs-key-power:hover { opacity: 1; background: rgba(127, 127, 127, .12); }
+.cs-key-power.is-on {
+  opacity: 1; color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.cs-key-power:disabled { cursor: default; opacity: .3; }
+
+/* The row's two verbs, in one group: inserting the key and deleting it are both
+   answers to "what do I do with this row", so they sit together at its end. */
+/* No margin-left: auto here. The badge's own auto margin already takes the free
+   space; adding a second one splits it and leaves the badge floating in the middle
+   of the row. */
+.cs-key-actions {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px;
+}
+.cs-key-remove {
+  flex: 0 0 auto; padding: 4px; line-height: 0;
+  background: none; border: 1px solid transparent; border-radius: 6px;
+  color: var(--text-muted); cursor: pointer; opacity: .5;
+}
+.cs-key-actions:hover .cs-key-remove { opacity: .8; }
+.cs-key-remove:hover {
+  opacity: 1; color: #c0392b;
+  border-color: color-mix(in srgb, #c0392b 35%, transparent);
+  background: color-mix(in srgb, #c0392b 8%, transparent);
+}
+.cs-key-remove:disabled { cursor: default; opacity: .3; }
+
+/* Empty list, and the filter that found nothing. */
+.cs-key-empty { padding: 14px 4px; font-size: 12px; opacity: .7; }
+.cs-key-empty-h { margin: 0 0 4px; font-weight: 600; }
+.cs-key-empty-b { margin: 0; line-height: 1.5; }
+/* The import dialog's file picker is driven by a real button, so the input itself
+   never shows: `display: none` on `input[type=file]` keeps it out of the tab order
+   in every browser except the ones that ignore it for a11y, and the button is what
+   a keyboard reaches. */
+.cs-file-input { display: none; }
+/* A dialog footer with a chooser at the left and its verbs at the right. The
+   chooser is an input method, not a decision; the auto margin is what separates the
+   two groups without a wrapper element. */
+.cs-actions-split { justify-content: flex-start; }
+.cs-actions-push { margin-left: auto; }
+
+/* A keychain nothing can open is a state, not an empty list: it takes the list's
+   place and carries the sentence that explains it. */
+.cs-damaged {
+  padding: 14px 14px 12px; margin: 0 0 8px;
+  border: 1px solid color-mix(in srgb, #c0392b 35%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, #c0392b 6%, transparent);
+}
+.cs-damaged-h { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.cs-damaged-b { margin: 0 0 10px; font-size: 12px; opacity: .75; line-height: 1.5; }
+.cs-damaged-actions { display: flex; justify-content: flex-end; }
+
+/* ---- the shared key form (new + edit) ------------------------------------ */
+
+.cs-name-row { display: flex; align-items: center; gap: 10px; }
+.cs-name-row label {
+  flex: 0 0 auto; min-width: 56px;
+  font-size: 12px; opacity: .75;
+}
+.cs-name-row input[type="text"],
+.cs-name-row input[type="password"] { flex: 1 1 auto; min-width: 0; margin: 0; }
+
+/* A block's title. Blocks are title / content / one row of verbs — the same shape
+   whether the content is a textarea, a list of words or an address. */
+.cs-form-h { margin: 0 0 6px; font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+/* A heading with one verb on the same line: the verb answers the heading, so the
+   row owns the gap instead of the paragraph. */
+.cs-form-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.cs-form-head .cs-form-h { margin: 0; }
+.cs-form-head .btn { padding: 3px 11px; font-size: 12px; }
+/* A verb group inside a heading row sits ON the row: the margin it carries for
+   standing under a panel would push the row apart. */
+.cs-form-head .cs-form-actions { margin-top: 0; }
+/* Folded words are drawn, not hidden: the grid keeps its height so the dialog does
+   not resize between states, and the blur is what makes them unreadable. */
+.cs-phrase.is-folded { filter: blur(5px); user-select: none; pointer-events: none; opacity: .5; }
+/* One line of fact under the name: no box, no paragraph rhythm — it is a caption for
+   the key, not a section of the sheet. */
+.cs-fact-line { margin: 10px 0 0; font-size: 12px; opacity: .7; }
+.cs-fact-line:empty { display: none; }
+.cs-form-block { margin: 14px 0 0; }
+.cs-form-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.cs-form-actions .btn { padding: 3px 11px; font-size: 12px; }
+.cs-detail-spacer { flex: 1 1 auto; }
+
+/* The footer is its own zone: the key's fate on the left, the dialog's ordinary
+   verbs on the right, and a rule between them and the form above. */
+.cs-footer {
+  margin-top: 18px; padding-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* The facts strip: what this key is, in two or three short lines, under the name
+   and above everything you can do to it. */
+/* base.css gives every dialog textarea `min-height: 220px`. These two hold a
+   phrase and a pasted blob, and `rows` says how tall they should be. */
+#key-form-words-input,
+#key-import-text {
+  min-height: 0;
+  width: 100%; box-sizing: border-box; resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--border-subtle); border-radius: 6px;
+  background: var(--bg-input); color: var(--text-primary);
+  font-family: var(--font-mono); font-size: 12px;
+}
+
+/* The address is a string people copy: one target, monospace, wrapping rather
+   than truncating — half an address is not an address. */
+/* The box and its caption are two things: 6px is what keeps the dashed border from
+   touching the first line of the sentence that explains it (measured at 0). */
+.cs-pub {
+  margin: 0 0 6px;
+  padding: 8px 10px; border-radius: 6px;
+  border: 1px dashed var(--border-strong);
+  background: var(--bg-input);
+  cursor: pointer; overflow-wrap: anywhere;
+}
+.cs-pub code { font-size: 11px; }
+.cs-pub.is-empty { opacity: .5; font-style: italic; }
+
+/* The 24 words, numbered, only while they are shown. */
+.cs-phrase {
+  margin: 0; padding: 0; list-style: none;
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px 8px;
+  font-family: var(--font-mono); font-size: 12px;
+}
+.cs-phrase-word { display: block; padding: 2px 4px; }
+
+/* ---- picking the key that seals a selection ------------------------------ */
+
+.cs-pick { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 12px; }
+/* Two classes, like the invert toggle above and for the same reason: this row is a
+   <label>, and `.modal-body label` (base.css) says `display: block`. A bare
+   `.cs-pick-row` loses that comparison, the row stops being a flex line, and the
+   name — a column flex box — drops onto the line under the radio. */
+.modal-body .cs-pick-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; margin: 0; border-radius: 6px;
+  font-size: inherit; color: inherit; cursor: pointer;
+}
+/* `.modal-body input` (base.css) makes every input a full-width text field. A
+   radio is an input, so inside this flex row it claimed the whole line and pushed
+   the key's name onto the next one — the dialog read as "a centred dot, then a
+   name". Undo exactly that sizing, nothing else: the glyph drawing is the
+   browser's. */
+.modal-body .cs-pick-row > input[type="radio"] {
+  flex: 0 0 auto;
+  width: 16px; height: 16px; min-width: 16px;
+  margin: 0; padding: 0;
+}
+.modal-body .cs-pick-row:hover { background: rgba(127, 127, 127, .1); }
+.cs-pick-name { font-size: 13px; font-weight: 600; }
+.cs-pick-facts { font-size: 11px; opacity: .65; }
+.cs-pick-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+/* ---- the tick, inside a dialog ------------------------------------------
+   `.modal-body input:not([type="checkbox"]):not([type="radio"])` sets width:100% and text-field padding for TEXT inputs,
+   and a checkbox is an input too. These rules undo exactly that and nothing
+   else: the drawing still comes from the one shared definition in
+   workspace.css (`.archive-row-tick, .ext-card-tick, .cs-key-tick,
+   .cs-tick-all`), which is why no appearance rules are repeated here. */
+.modal-body .cs-key-tick,
+.modal-body .cs-tick-all {
+  flex: 0 0 auto;
+  width: 15px; height: 15px; min-width: 15px;
+  padding: 0; margin: 0;
+  border-radius: 0;
+}

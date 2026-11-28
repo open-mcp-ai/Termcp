@@ -117,3 +117,37 @@ func TestUserAliasCannotContainDot(t *testing.T) {
 		t.Fatalf("expected refusal reason:\n%s", res)
 	}
 }
+
+// `$$1` MEANS "THE SHELL'S $1, NOT THE ALIAS'S".
+//
+// A body's `$1` is filled from the caller's args — that is what makes an alias a
+// command rather than a macro — so there was no way to write a body whose text has to
+// contain a real `$1` for the shell. `$$1` is that escape: it is swapped for an opaque
+// token before the parse and swapped back to a literal `$1` afterwards, so nothing
+// substitutes it and the shell receives exactly what the body says.
+func TestAnAliasCanDeferADollarToTheShell(t *testing.T) {
+	s := newTestServer(t)
+
+	// A body whose `$1` belongs to the shell, not to the caller: `$$1` escapes it.
+	res := termText(t, s, map[string]any{"cmd": `create alias esc "ls $$1"`})
+	if !strings.HasPrefix(res, "TERM/1 204") {
+		t.Fatalf("create alias with an escaped reference failed: %s", res)
+	}
+
+	// THE STORED BODY KEEPS THE ESCAPE AS WRITTEN, so `ls alias` shows the author's
+	// intention rather than a pre-expanded result.
+	listing := termText(t, s, map[string]any{"cmd": "ls alias"})
+	if !strings.Contains(listing, `esc = ls $$1`) {
+		t.Fatalf("the stored body lost its escape: %s", listing)
+	}
+
+	// INVOKING IT LEAVES THE DOLLAR ALONE. An ordinary invocation names no $1 and
+	// expands to a literal `$1` for the shell.
+	out := termText(t, s, map[string]any{"cmd": "esc"})
+	if strings.Contains(out, "$$1") || strings.Contains(out, "termcpesc") {
+		t.Fatalf("the escape token leaked into the expansion: %s", out)
+	}
+	if !strings.Contains(out, "Path: ls $1") {
+		t.Fatalf("the escaped reference did not reach the directive as a literal: %s", out)
+	}
+}

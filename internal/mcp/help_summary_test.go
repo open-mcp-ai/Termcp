@@ -36,6 +36,54 @@ func TestHelpSummaryIsCheaperThanThePage(t *testing.T) {
 	}
 }
 
+// `help open` is asked more often than any other page because every new channel starts
+// there, and its page is the longest in the surface. The default answer must therefore be
+// complete for the default window while still being the summary: every flag explained,
+// and a pointer to the page for the essay.
+func TestOpenHelpFitsTheDefaultWindow(t *testing.T) {
+	s := newTestServer(t)
+	got := termText(t, s, map[string]any{"cmd": "help open"})
+	if !strings.Contains(got, "TERM/1 200") {
+		t.Fatalf("help open failed:\n%s", got)
+	}
+	if !strings.Contains(got, "help open --all") {
+		t.Errorf("the default answer must name the page:\n%s", got)
+	}
+	op, ok := directive.Lookup("open")
+	if !ok {
+		t.Fatal("open is not declared")
+	}
+	// THE TABLE MUST NOT HAVE HOLES: a flag with no line is a question the summary
+	// silently cannot answer, which is worse than the page it replaced.
+	for _, flag := range op.FlagNames() {
+		line, ok := directive.FlagSummary("open", flag)
+		if !ok {
+			t.Errorf("--%s is declared by open but has no summary line", flag)
+			continue
+		}
+		if !strings.Contains(got, line) {
+			t.Errorf("the summary does not carry the --%s line %q", flag, line)
+		}
+	}
+	page := termText(t, s, map[string]any{"cmd": "help open --all", "bytes_limit": 32768, "lines_limit": 100000})
+	if !strings.Contains(page, op.Detail) {
+		t.Error("--all must return the page itself")
+	}
+	if len(got) >= len(page)/2 {
+		t.Errorf("summary %d bytes vs page %d: not a smaller question", len(got), len(page))
+	}
+	// The published example must parse, or the first thing a caller copies fails.
+	example, ok := directive.SummaryExample("open")
+	if !ok {
+		t.Fatal("open has no summary example")
+	}
+	cmd, _, _ := strings.Cut(example, "#")
+	if _, err := directive.Parse(strings.TrimSpace(cmd)); err != nil {
+		t.Errorf("the published example does not parse: %v\n%s", err, example)
+	}
+	t.Logf("default %d bytes; full %d bytes", len(got), len(page))
+}
+
 // A verb that has not migrated keeps its page, so the surface can move one verb at a
 // time without a half-migrated table anywhere.
 func TestUnmigratedVerbStillReturnsItsPage(t *testing.T) {

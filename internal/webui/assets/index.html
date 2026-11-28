@@ -110,9 +110,10 @@
             <!-- Anchored to the split itself (top: 100%), so it follows the key
                  wherever the row puts it — no hardcoded offset to drift. -->
             <div class="nethub-open-menu" id="nethub-open-menu" role="menu" aria-label="Batch actions" data-i18n-aria="nethub.batch.menuAria" hidden>
-              <button type="button" class="nethub-menu-item" id="nethub-menu-export" role="menuitem" title="Export Config" data-i18n-title="conn.batch.export">
+              <!-- One verb: exporting a host and sharing it are the same intention. -->
+              <button type="button" class="nethub-menu-item" id="nethub-menu-export" role="menuitem" title="Export or share" data-i18n-title="nethub.batch.exportShare">
                 <svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 1.5v7"/><path d="M4 5.5l3 3 3-3"/><path d="M1.5 10.5v1a1 1 0 001 1h9a1 1 0 001-1v-1"/></svg>
-                <span data-i18n="conn.batch.export">Export Config</span>
+                <span data-i18n="nethub.batch.exportShare">Export or share</span>
               </button>
               <button type="button" class="nethub-menu-item nethub-menu-danger" id="nethub-menu-delete" role="menuitem" title="Delete selected" data-i18n-title="section.batch.deleteSelected" aria-label="Delete selected hosts" data-i18n-aria="nethub.batch.deleteTitle">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 01-1-1h-4a1 1 0 01-1 1v3M4 7h16"/></svg>
@@ -502,7 +503,7 @@
           <label for="fw-remote-port" data-i18n="modal.forward.targetPort">Target port</label>
           <input type="number" id="fw-remote-port" placeholder="port" data-i18n-placeholder="modal.forward.targetPortPlaceholder" min="1" max="65535">
         </div>
-        <label for="fw-local-host" data-i18n="modal.forward.listenHost">Listen host</label>
+        <label for="fw-local-host" id="fw-local-host-label" data-i18n="modal.forward.listenHostHere">Listen host (this machine)</label>
         <input type="text" id="fw-local-host" placeholder="e.g. 127.0.0.1" data-i18n-placeholder="modal.forward.listenHostPlaceholder" autocomplete="off">
         <label for="fw-local-port" id="fw-local-port-label" data-i18n="modal.forward.listenPort">Listen port (0 = random)</label>
         <input type="number" id="fw-local-port" placeholder="0" value="0" min="0" max="65535">
@@ -580,7 +581,7 @@
       </div>
       <div class="modal-body">
         <p id="conn-import-err" class="err" style="display:none"></p>
-        <div class="conn-field"><label for="conn-import-file" data-i18n="conn.batch.file">TOML file</label><input type="file" id="conn-import-file" accept=".toml,application/toml,text/plain"></div>
+        <div class="conn-field"><label for="conn-import-file" data-i18n="conn.batch.file">TOML file</label><input type="file" id="conn-import-file" accept=".toml,.enc,application/toml,application/x-termcp-encrypted,text/plain"></div>
         <div class="conn-field conn-field-check"><label class="conn-check" for="conn-import-temporary"><input type="checkbox" id="conn-import-temporary"><span data-i18n="conn.temporary">Temporary host</span></label><div class="conn-check-hint" data-i18n="conn.batch.temporaryHint">Applies to every host in this file. Temporary hosts disappear when termcp stops.</div></div>
         <p class="conn-check-hint" data-i18n="conn.batch.collisionHint">Conflicting host names are renamed automatically. Invalid files import no hosts.</p>
         <p id="conn-import-result" role="status" class="form-ok" style="display:none"></p>
@@ -741,6 +742,8 @@
   <script src="static/js/terminal-switcher.js"></script>
   <script src="static/js/dialogs.js"></script>
   <script src="static/js/conn-form.js"></script>
+  <script src="static/js/config-storage.js"></script>
+  <script src="static/js/share.js"></script>
   <script src="static/js/extensions.js"></script>
   <script src="static/js/archive-column.js"></script>
   <script src="static/js/clients.js"></script>

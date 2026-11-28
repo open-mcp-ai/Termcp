@@ -437,7 +437,19 @@ function startSessionAndOpenShell(connName, pos, opt) {
   else if (connName) body.name = connName;
   return fetch(apiPath('/api/sessions'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: ac.signal })
     .then(function (r) {
-      if (!r.ok) return r.text().then(function (t) { throw new Error(t || r.status); });
+      if (!r.ok) return r.text().then(function (t) {
+        /* The body may be a {code, error} pair (a key that is not loaded, for
+           instance). Keep the code on the error so the surface that reports it
+           can answer in the user's language instead of echoing the server's
+           sentence. */
+        var failure = new Error(t || r.status);
+        try {
+          var parsed = JSON.parse(t);
+          failure.code = parsed.code;
+          if (parsed.error) failure.message = parsed.error;
+        } catch (ignored) { /* plain-text errors are the older shape */ }
+        throw failure;
+      });
       return r.json();
     })
     .then(function (j) {

@@ -341,6 +341,16 @@ func (s *Server) readSlotAfter(ctx context.Context, stmt directive.Statement, wi
 	// and callers acted on it by typing the next command into a program that still held
 	// the terminal. Absence now means what it says: not known.
 	watch.headers(&slot)
+	// A SHELL THAT REPORTS ITS OWN COMPLETION IS ASKED EVEN WHEN NOBODY NAMED IT (#310
+	// P3.1). `--until exit` reads the same marker; a caller that has no idea the marker
+	// exists is exactly the caller for whom the precise answer was unavailable, and the
+	// machine that can answer it is the one whose `run` said nothing. Only on a pty (a
+	// pipe's process exit is the stronger fact and is already reported), only when the
+	// caller did not attach a watch (its own predicate is the question it asked), and
+	// only with a marker actually read — absence stays "not known".
+	if watch == nil && sawBytes {
+		s.noteShellCompletion(ctx, stmt, &slot, start, channelEnd)
+	}
 	if watch != nil && !watch.matched && slot.Code < 400 {
 		// A CONTRADICTION IN ONE REPLY: if the shell exited and printed its code (e.g.
 		// Windows ConPTY child exit), saying "this reply says nothing about whether the
@@ -868,8 +878,28 @@ func (s *Server) windowSlot(stmt directive.Statement, win termArgs, doc map[stri
 		headers["Folded"] = fmt.Sprintf("bytes %d-%d of %d; read --cursor %d", start, total-1, total, start)
 	}
 
+	// DELIVERED OR ACCOUNTED FOR, NEVER "THE WINDOW COVERED BYTES" (issue #269 #1).
+	//
+	// This used to be `len(body) > 0 || end > start`, and `end > start` is true whenever
+	// the window covered bytes — including a window that covered ONLY the pty's echo of
+	// the line plus its bracketed-paste escape, which the text path strips to nothing.
+	// The measured reply was `200`, an empty body, and `Content-Range: bytes 314-335/336`:
+	// "22 bytes here", zero delivered, in a 200 that a caller cannot tell apart from a
+	// truncated one. The reporter of #269 followed exactly that header and lost the
+	// window it named.
+	//
+	// The one way bytes can be absent from the body WITHOUT the reply lying is the way that
+	// names them: `fold` says `Folded: bytes A-B of T; read --cursor A`, so the bytes are
+	// still there to fetch and the 206 with its range stays.
+	//
+	// A `--stream` FILTER IS NOT THAT CASE, and the difference is measured rather than
+	// argued: `read --stream e --offset 0` on a stdout-only channel selects nothing, so its
+	// stream total is 0 and `bytes */0` is the only true range — it must not become a 200
+	// because the other stream's bytes went past (issue #202, pinned by
+	// TestAnEmptyStreamReportsZeroBytes). Those bytes are named by `Omitted`, which is a
+	// fact the caller can act on without the status claiming a delivery.
+	hasBytes := len(body) > 0 || truncated
 	code := 200
-	hasBytes := len(body) > 0 || end > start
 	switch {
 	case hasBytes && (truncated || boolAny(doc, "has_more")):
 		code = 206

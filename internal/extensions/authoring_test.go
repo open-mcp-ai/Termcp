@@ -87,7 +87,8 @@ func TestApplyArgsDropsOnExit(t *testing.T) {
 // extension moved to another connection" and "this is a different template" are
 // independent facts about one edit.
 func TestStateChangeDetectsBothReadings(t *testing.T) {
-	st := &extState{status: StatusUnavailable}
+	st := &extState{}
+	st.data.Store(&extStateData{status: StatusUnavailable})
 	ext := Extension{}
 	ext.Name = "probe"
 	ext.Target = "internal"
@@ -205,9 +206,7 @@ func TestReconcileWalkRecordsTheFingerprintWhenTheGroupMoves(t *testing.T) {
 	r.Sync(t.Context(), ext.Name)
 
 	st := r.state(ext.Name)
-	st.mu.Lock()
-	got := st.fingerprint
-	st.mu.Unlock()
+	got := st.load().fingerprint
 	if want := fingerprint(&ext); got != want {
 		t.Errorf("the walk that saw the group move left the fingerprint stale: got %q, want %q", got, want)
 	}

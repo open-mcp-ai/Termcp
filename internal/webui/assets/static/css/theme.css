@@ -64,6 +64,14 @@
   /* A breathing backdrop is decoration: at rest it simply stays at its brighter
      value, so nothing about the page's contrast changes. */
   .page-backdrop { animation: none; opacity: 1; }
+  /* The batch plate's per-tick flash (workspace.css) is the one rule here that is a
+     CUE rather than decoration, and it is still switched off: a full-box flash,
+     restarted on every tick, is the shape a motion-sensitive reader asked to be
+     spared. Nothing is lost — the card just ticked is lit and the switch counts it,
+     so the flash only says "over here", which the two keys keep saying by being
+     where they always are. */
+  .nethub-open-plate.is-ticking,
+  .nethub-open-plate.is-ticking button { animation: none; }
   /* Every rule above is decoration, and at rest it stays at its readable value.
      `.session-tab.is-fresh` is deliberately NOT here. Holding its lit state instead
      of blinking was the bug: on a bright accent theme (matrix) that made the tab a
@@ -74,11 +82,11 @@
 }
 
 /* ---- Inputs and overlays ---------------------------------------------- */
-.modal-body input:focus, .modal-body textarea:focus, .modal-body select:focus,
+.modal-body input:not([type="checkbox"]):not([type="radio"]):focus, .modal-body textarea:focus, .modal-body select:focus,
 .conn-field input:focus, .conn-field select:focus, .conn-field textarea:focus {
   outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring);
 }
-.modal-body input, .modal-body textarea, .modal-body select,
+.modal-body input:not([type="checkbox"]):not([type="radio"]), .modal-body textarea, .modal-body select,
 .conn-field input, .conn-field select, .conn-field textarea { transition: border-color .14s ease, box-shadow .14s ease; }
 .modal { background: var(--bg-elevated); }
 .modal-h { background: var(--bg-card); }
@@ -324,7 +332,7 @@
 .btn, .icon-btn, .lang-btn, .theme-btn { border-radius: 7px; }
 .btn-primary { background: var(--accent); border-color: var(--accent); color: var(--text-on-accent); }
 .btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: none; }
-.modal-body input, .modal-body select, .modal-body textarea { border-radius: 7px; }
+.modal-body input:not([type="checkbox"]):not([type="radio"]), .modal-body select, .modal-body textarea { border-radius: 7px; }
 .shell-window-header-btns button, .title-copy-btn, .shell-channel-tab-add, .shell-channel-add-caret, .shell-tab-btn { border-radius: 5px; }
 .shell-window-title .sw-conn { font-family: var(--font-sans); }
 .shell-window-title .shell-dead-badge { border-radius: 4px; letter-spacing: .02em; }
