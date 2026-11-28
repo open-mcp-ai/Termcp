@@ -24,11 +24,14 @@ import (
 // yet" — a 204, and a position that did not move.
 func TestAnEmptyBodyIsNotADeliveredRange(t *testing.T) {
 	s := newTestServer(t)
-	h := openPty(t, s)
+	// A PIPE, NOT A PTY, and that is about what the test can isolate rather than about the
+	// defect: a pty echoes the typed line back as output, and on Windows' ConPTY that echo
+	// is ordinary visible text ("sleep 1") with nothing to strip — so "a command that
+	// prints nothing" is not a state a pty can be put in there, and the reply honestly
+	// delivered the echo. The range logic under test does not depend on the channel type;
+	// a pipe simply has no echo, which makes "nothing delivered" true on every platform.
+	h := openPipe(t, s, "sh")
 	defer termText(t, s, map[string]any{"cmd": "close " + h})
-	// Establish the prompt first: an unread startup banner IS delivered bytes, and what
-	// this test isolates is a command that prints nothing of its own.
-	awaitPtyReady(t, s, h)
 
 	// A command that prints nothing inside a window far shorter than its runtime: the
 	// window covers the echo and nothing else.

@@ -10,10 +10,27 @@ import (
 
 	"github.com/open-mcp-ai/termcp/internal/approval"
 	"github.com/open-mcp-ai/termcp/internal/capability"
+	"github.com/open-mcp-ai/termcp/internal/sftp"
 )
 
 // startGatedSession opens a session and turns approval mode on, returning the
 // session id and shell id.
+// wireOrSame is the spelling an operation will USE on the wire.
+//
+// A review summary describes the path the operation runs against, and on Windows that is
+// the POSIX wire form (`/C:/dir/file`) because adaptCallPaths rewrites the argument before
+// admission — the whitelist, the handler and the log all read that one spelling
+// (internal/mcp/pathspell.go). Comparing a summary to the caller's `C:\dir\file` therefore
+// asserts a platform detail: it passes on the POSIX runners and fails on Windows, which is
+// where the adaptation actually happens. Asking sftp.WireSpelling for the same answer is
+// what keeps the assertion about the reviewer's information.
+func wireOrSame(p string) string {
+	if spelled, ok := sftp.WireSpelling(p); ok {
+		return spelled
+	}
+	return p
+}
+
 func startGatedSession(t *testing.T, s *Server, need int, timeout time.Duration) (string, string) {
 	t.Helper()
 	startReq := makeRequest(map[string]any{
@@ -452,8 +469,9 @@ func TestFileWriteIsHeldAndExecutedOnApproval(t *testing.T) {
 	if req.Kind != approval.KindFileWrite {
 		t.Errorf("kind = %q, want %q", req.Kind, approval.KindFileWrite)
 	}
-	if !strings.Contains(req.Summary, target) {
-		t.Errorf("summary %q does not name the target, so a reviewer cannot decide", req.Summary)
+	if !strings.Contains(req.Summary, wireOrSame(target)) {
+		t.Errorf("summary %q does not name the target (%q), so a reviewer cannot decide",
+			req.Summary, wireOrSame(target))
 	}
 	if req.Text != "" {
 		t.Errorf("a file write carries no command text, got %q", req.Text)

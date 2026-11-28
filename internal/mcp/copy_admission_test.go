@@ -141,8 +141,10 @@ func TestAnApprovedCopyActuallyCopies(t *testing.T) {
 	req := pend[0]
 	// THE REVIEWER IS TOLD IT IS A COPY, and where from: approving "write /x" without
 	// knowing what lands there is not a decision about anything.
-	if !strings.Contains(req.Summary, "copy") || !strings.Contains(req.Summary, src) {
-		t.Errorf("summary %q does not describe a copy from the source", req.Summary)
+	// THE SOURCE IN THE SPELLING THE COPY WILL USE: on Windows adaptCallPaths rewrites it
+	// to the POSIX wire form before admission, and the summary reports that one path.
+	if !strings.Contains(req.Summary, "copy") || !strings.Contains(req.Summary, wireOrSame(src)) {
+		t.Errorf("summary %q does not describe a copy from the source (%q)", req.Summary, wireOrSame(src))
 	}
 	if _, err := q.Approve(req.ID); err != nil {
 		t.Fatalf("approve: %v", err)

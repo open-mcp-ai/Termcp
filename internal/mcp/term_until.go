@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/open-mcp-ai/termcp/internal/ansi"
 	"github.com/open-mcp-ai/termcp/term/directive"
 	"github.com/open-mcp-ai/termcp/term/envelope"
 )
@@ -203,15 +204,6 @@ type untilWatch struct {
 	// echoText is what this call typed, so the echo can be recognised instead of assumed
 	// to be "the first line".
 	echoText string
-	// outFrom is the absolute offset where the output begins: the byte after the echoed
-	// line. Zero means "not located yet".
-	//
-	// IT IS AN OFFSET, NOT A ONE-TIME SLICE. Skipping the echo by slicing the text once
-	// only skipped it for that poll; the next poll re-read the tail, which still
-	// contained the echo, and matched the caller's own command. On a Linux runner that
-	// is what made `--until` answer "matched" 0.08s after typing, before the command had
-	// printed anything.
-	outFrom  int64
 	matched  bool
 	exitCode *int
 }
@@ -266,42 +258,27 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 	// BEFORE THE ECHO IS LOCATED THE WHOLE WINDOW IS READ, and afterwards the read
 	// starts where the output does — never before it, or the echo comes back into view
 	// on the next poll.
-	if !w.echo || w.outFrom == 0 {
+	if w.echo {
+		// FROM THE START, EVERY POLL: a ConPTY repaints the echoed line on a later poll,
+		// so a window that had already moved past the echo would see the repaint as output.
 		from = start
-	} else if from < w.outFrom {
-		from = w.outFrom
 	}
 	text, ok := s.peekRaw(ctx, handle, from, now)
 	if !ok {
 		return false, false
 	}
-	// A WINDOWS CONPTY RENDERS THE ECHO ACROSS MULTIPLE POLLS.
-	//
-	// The pty driver echoes what was typed, and PSReadLine later repaints it — often on a
-	// subsequent poll, AFTER the command output (`hi\n`) has already arrived! So the stream
-	// order on Windows ConPTY can literally be:
-	//     1. (pty driver echo) echo hi # MARKER\n
-	//     2. (command output)  hi\n
-	//     3. (PSReadLine repaint) echo hi # MARKER
-	//
-	// Setting `outFrom` on the first poll to after line 1 and never checking again meant the
-	// subsequent repaint on poll 2 was treated as output, matching the caller's own command.
-	//
-	// Therefore, as long as `w.echo` is true, ANY line in `text` that contains the echoed
-	// command line is the terminal drawing our input, not output, and is skipped.
+	// THE ECHO IS RECOGNISED BY ITS TEXT, NOT BY ITS BYTES, and that distinction is a
+	// measured bug rather than a preference. A shell that COLOURISES the typed line —
+	// PowerShell's PSReadLine, zsh syntax highlighting — interleaves SGR sequences
+	// between the words, so the caller's line never appears as one contiguous
+	// substring: the byte search found nothing, the echo stayed in the text, and
+	// `--until` matched the caller's own command 0.08 s after typing. ConPTY also
+	// repaints the echo on a later poll (after the command's output has arrived), so
+	// two copies can be present, sometimes concatenated on one line. Comparing LINES,
+	// with the colour removed for the comparison only, covers both — a line is what a
+	// terminal echoes.
 	if w.echo {
-		for {
-			idx := strings.Index(text, w.echoText)
-			if idx < 0 {
-				break
-			}
-			nl := strings.IndexByte(text[idx:], '\n')
-			if nl < 0 {
-				// The echo line is still arriving: nothing past it is output yet.
-				return false, true
-			}
-			text = text[idx+nl+1:]
-		}
+		text = dropEchoLines(text, w.echoText)
 	}
 	loc := w.spec.re.FindStringSubmatch(text)
 	if loc == nil {
@@ -314,6 +291,28 @@ func (s *Server) matchUntil(ctx context.Context, handle string, start int64, w *
 		}
 	}
 	return true, true
+}
+
+// dropEchoLines removes every line that is the terminal drawing the caller's input.
+//
+// THE COLOUR IS REMOVED FOR THE COMPARISON, NOT FROM THE RESULT: the caller's regex may
+// be looking for an ANSI sequence (the shell's own completion report is one), so the
+// bytes that are kept stay exactly as they arrived.
+func dropEchoLines(text, echo string) string {
+	if echo == "" {
+		return text
+	}
+	lines := strings.SplitAfter(text, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.Contains(ansi.Strip(line), echo) {
+			// The terminal drawing our input, in whatever colour it chose. A partial
+			// echo (no newline yet) is dropped too: nothing after it can be output.
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "")
 }
 
 // peekRaw reads [from,to) as the bytes that arrived, without consuming anything.

@@ -1,6 +1,14 @@
 # Changelog
 
 ## Unreleased
+- **`--until` no longer matches a colourised echo of your own command.** A shell that
+  highlights the typed line (PowerShell's PSReadLine, zsh syntax highlighting) puts SGR
+  sequences *between* the words, so the echo never appeared as one contiguous substring:
+  the byte search found nothing, the echo stayed in the window, and `--until` answered
+  `Completion: matched` a fraction of a second after typing, before the command had run.
+  The echo is now recognised line by line with the colour removed for the comparison
+  only, which also covers ConPTY repainting the line on a later poll.
+
 - **`args` also takes an object, so a frame does not have to be written into the command
   line.** The list form is unchanged (positional `$1`, `$2`, …); the object form is named
   (`$NAME`), inserted by the same rule in both: a string verbatim, every other JSON value
