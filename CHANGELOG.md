@@ -1,6 +1,16 @@
 # Changelog
 
 ## Unreleased
+- **The instance's own MCP endpoint can subscribe to extension events.** A peer that
+  speaks on its own (`notifications/<its own name>/<event>`) used to reach only a client
+  attached to `/ext/{name}/stream`, so watching several extensions meant holding one MCP
+  session per extension. `termcp/subscribe` (`{"ext":"name"}` or `{"ext":"*"}`) now
+  delivers them on the main endpoint as `notifications/termcp/ext`, wrapped with the
+  extension's name so a subscriber knows who spoke; `termcp/subscriptions` reads the set
+  back with `delivered` / `dropped` counters, and a name that is not an extension is
+  refused with the ones that are. Delivery is from-now-on: no replay, no queue — a client
+  that was not attached missed it, and the reply says so.
+
 - **`--until` no longer matches a colourised echo of your own command.** A shell that
   highlights the typed line (PowerShell's PSReadLine, zsh syntax highlighting) puts SGR
   sequences *between* the words, so the echo never appeared as one contiguous substring:

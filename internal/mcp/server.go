@@ -41,6 +41,9 @@ type Server struct {
 	sshConfigs *sshconfig.Store
 	forwardMgr *forward.ForwardManager
 	extensions *extensions.Reconciler
+	// extEvents is who asked to hear from which extension (#275's narrow half). Nil in a
+	// construction path that never registered the methods, which is why every use checks.
+	extEvents  *extEventSubs
 	baseURL    string // http://host:port, set from Start()
 	docsFS     fs.FS  // embedded agent docs, set via SetDocsFS
 	NoInternal bool   // when true, hide and refuse the built-in loopback profile

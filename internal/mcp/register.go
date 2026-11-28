@@ -47,6 +47,7 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		tasks:       task.NewManager(),
 		ptyQuiet:    newPtyQuietTracker(sessMgr),
 		sftpEngines: sftpengine.NewPool(sessMgr),
+		extEvents:   newExtEventSubs(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -65,6 +66,12 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 		OnUnregisterSession: []func(ctx context.Context, session mcp.Session){
 			func(_ context.Context, session mcp.Session) {
 				s.connections.remove(session)
+				// A SUBSCRIPTION DIES WITH ITS CLIENT: the table holds the session object,
+				// and a session that ended can never be written to again. Leaving it would
+				// make every event pay for a delivery nobody can receive.
+				if s.extEvents != nil {
+					s.extEvents.forget(session.SessionID())
+				}
 				s.notifyConnectionsChanged()
 			},
 		},
@@ -97,6 +104,12 @@ func New(sessMgr *session.Manager, msgMgr *message.Manager, sshConfigs *sshconfi
 	// from this registration (mcp/server.go), so a build that does not call this cannot
 	// claim a picker it does not answer.
 	mcpServer.OnMethod("completion/complete", s.handleCompletion)
+	// EXTENSION EVENTS ON THE MAIN ENDPOINT (#275's narrow half). Three custom methods,
+	// registered together: a table that can be written but not read back is how a client
+	// ends up guessing what it is subscribed to.
+	mcpServer.OnMethod(extSubscribeMethod, s.handleExtSubscribe)
+	mcpServer.OnMethod(extUnsubscribeMethod, s.handleExtUnsubscribe)
+	mcpServer.OnMethod(extListSubsMethod, s.handleExtSubscriptions)
 
 	s.mcpServer = mcpServer
 	// Both transports lift the request's own origin into the context, so a tools/list

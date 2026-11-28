@@ -221,6 +221,7 @@ func (p *extPump) route(ctx context.Context, frame []byte) {
 	var env struct {
 		ID     *json.RawMessage `json:"id"`
 		Method string           `json:"method"`
+		Params json.RawMessage  `json:"params"`
 	}
 	if err := json.Unmarshal(frame, &env); err != nil {
 		return // a banner or a log line, not a message
@@ -234,6 +235,10 @@ func (p *extPump) route(ctx context.Context, frame []byte) {
 		if p.tr() != nil {
 			p.tr().Broadcast(frame)
 		}
+		// AND TO WHOEVER SUBSCRIBED ON THE MAIN ENDPOINT (#275's narrow half), which is
+		// the same event wrapped with the extension's name — the extension endpoint
+		// cannot tell a client which extension spoke, because each endpoint serves one.
+		p.s.publishExtEvent(ctx, p.name, env.Method, env.Params)
 	case env.Method != "" && hasID:
 		// THE PEER ASKS US SOMETHING. Nothing on this endpoint accepts server-initiated
 		// requests (no client here declared sampling or elicitation), so answering with an

@@ -2466,6 +2466,31 @@ response lists them:
 Response 201: { "imported": 2, "renamed": [ { "from": "docs", "to": "docs-2" } ] }
 ```
 
+### Extension events on the MCP endpoint
+
+A client attached to the instance's own MCP endpoint (`/stream` or `/sse`) can ask to be
+told what the extensions say, instead of holding one MCP session per extension against
+`/ext/{name}/stream`:
+
+| Custom method | Params | Answer |
+|---------------|--------|--------|
+| `termcp/subscribe` | `{"ext":"<name>"}` or `{"ext":"*"}` | `{"subscribed":[…],"from_now":…}` |
+| `termcp/unsubscribe` | the same | `{"subscribed":[…]}` |
+| `termcp/subscriptions` | none | `{"subscribed":[…],"delivered":n,"dropped":n}` |
+
+Frames arrive as `notifications/termcp/ext` with
+`{"extension":"<name>","method":"<the peer's own method>","params":{…}}` on the client's
+listening `GET` stream; the peer's method name and payload are unchanged inside the
+envelope, so a subscriber filters by what the peer called it. `*` also covers extensions
+created after the subscription.
+
+There is no replay: a frame that arrived while the client was not attached is gone, and
+the subscribe answer says so in words rather than leaving it to be discovered. `dropped`
+counts frames a subscriber could not take (no open `GET` stream, or not reading), which is
+what makes "nothing happened" and "I lost events" different answers. A frame the peer
+sends as a *request* is not relayed — the extension endpoint answers those with an error,
+because nothing there accepts a server-initiated request.
+
 ## 15. The term entrance
 
 ### `POST /api/term`
